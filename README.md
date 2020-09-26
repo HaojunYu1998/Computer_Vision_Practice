@@ -1,2 +1,2 @@
 # Computer_Vision_Practice
-Reimplementation of basic papers in CV.
+Re-implementation of basic papers in CV.
