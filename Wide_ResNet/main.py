@@ -123,4 +123,4 @@ def test(
 
 if __name__ == "__main__":
     train(28, 10, print_freq=1)
-                                                                                                                                   125,31        Bot
+                                                                                                                                   125,31        Bo
