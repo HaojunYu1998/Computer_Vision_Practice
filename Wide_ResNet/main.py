@@ -1,4 +1,4 @@
-import os
+mport os
 import time
 import pickle
 import numpy as np
@@ -18,17 +18,17 @@ from utils import transform, target_transform, AverageMeter, adjust_learning_rat
 
 def train_one_epoch(train_loader, model, criterion, optimizer, learning_rate, gpu=1) -> Any:
     n_batch = len(train_loader)
-    model.train()    
-    
+    model.train()
+
     loss_meter = AverageMeter()
     acc_meter = AverageMeter()
-    
+
     for dx, batch in enumerate(train_loader):
         img, label = batch
         img = torch.Tensor(img).to(torch.device(gpu))
         label = torch.Tensor(label).view(-1,1).to(torch.device(gpu))
         batch_size = img.shape[0]
-        
+
         out = model(img)
         loss = criterion(out, label.long().squeeze())
         optimizer.zero_grad()
@@ -36,19 +36,19 @@ def train_one_epoch(train_loader, model, criterion, optimizer, learning_rate, gp
         for param_group in optimizer.param_groups:
             param_group["lr"] = learning_rate
         optimizer.step()
-        
+
         preds = out.argmax(dim=1)
         acc = accuracy_score(label.cpu().long().squeeze(), preds.cpu().long().squeeze())
         acc_meter.update(acc, batch_size)
         loss_meter.update(loss.item(), batch_size)
-        
+
         #torch.cuda.synchronize()
         
     return loss_meter, acc_meter
     
 def train(
-    depth: int, 
-    widen_factor: int, 
+    depth: int,
+    widen_factor: int,
     dropout_rate: float=0.3,
     num_classes: int=10,
     num_epochs: int=200,
@@ -60,6 +60,9 @@ def train(
     gpu: int=1,
 ) -> None:
     torch.manual_seed(2020)
+    torch.backends.cudnn.deterministic = True
+    np.random.seed(2020)
+    torch.backends.cudnn.benchmark = False
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model_folder = os.path.join("model/","WRN_{}_{}/".format(depth, widen_factor))
 
@@ -80,6 +83,7 @@ def train(
     print("start training!")
 
     since = time.time()
+    history = {"accuracy": [], "loss": []}
     for epoch in range(1, num_epochs+1):
 
         lr = adjust_learning_rate(lr, epoch, decay_epochs)
@@ -88,13 +92,16 @@ def train(
 
         if verbose and epoch % print_freq == 0:
             print_info(epoch, num_epochs, loss, acc, epoch_time)
+            history["accuracy"].append(acc.avg)
+            history["loss"].append(loss.avg)
 
         if epoch % save_freq == 0:
             save_model(model, optimizer, epoch, "ckpt_epoch_{epoch}.pth".format(epoch=epoch), model_folder)
     save_model(model, optimizer, num_epochs, "current.pth", model_folder)
     torch.cuda.empty_cache()
     print("finish training!")
-    
+    np.save("./model/WRN_{}_{}/history.npy".format(depth, widen_factor), history)
+
 def test(
     depth: int,
     widen_factor: int,
