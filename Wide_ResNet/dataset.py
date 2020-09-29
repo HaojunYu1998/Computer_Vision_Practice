@@ -50,7 +50,7 @@ class CIFAR10(data.Dataset):
         self.target_transform = target_transform
         self.data: Any = []
         self.targets = []
-        
+
         if self.train:
             data_list = self.train_list
         else:
@@ -67,7 +67,7 @@ class CIFAR10(data.Dataset):
                     self.targets.extend(entry['fine_labels'])
 
         self.data = np.vstack(self.data).reshape(-1, 3, 32, 32)
-        self.data = ZCA_whitening(self.data)
+        # self.data = ZCA_whitening(self.data)
 
         self._load_meta()
 
@@ -86,7 +86,7 @@ class CIFAR10(data.Dataset):
 
         Returns:
             tuple: (image, target) where target is index of the target class.
-        """
+        """                                                                                                                  89,1          78%
         img, target = self.data[index], self.targets[index]
 
         if self.transform is not None:
