@@ -32,7 +32,9 @@ def ZCA_whitening(imgs):
     return rescaled_white_imgs
 
 def transform(img):
-    return global_contrast_normalization(img, 1, 10, 0.1)
+    img = (img - img.mean()) / np.std(img)
+    # return global_contrast_normalization(img, 1, 10, 0.1)
+    return np.array(img, dtype=np.float32)
 
 def target_transform(label):
     return np.array(label, dtype=np.float32)
@@ -40,9 +42,9 @@ def target_transform(label):
 def conv3x3(in_planes, out_planes, stride=1, padding=1):
     """3x3 convolution with padding"""
     return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=padding, bias=False)
+
 def conv1x1(in_planes, out_planes, stride=1, padding=1):
     """1x1 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, padding=padding, bias=False)
 	
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -65,9 +67,9 @@ class AverageMeter(object):
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
-		
+
 def adjust_learning_rate(lr, epoch, decay_epochs):
-    return lr * 0.8 if (epoch+1) in decay_epochs else lr
+    return lr * 0.2 if (epoch+1) in decay_epochs else lr
 
 def save_model(model, optimizer, epoch, file_name, model_folder) -> None:
     print("==> Saving...")
@@ -96,3 +98,10 @@ def print_info(epoch, num_epochs, loss, acc, epoch_time):
             epoch, num_epochs, loss=loss, acc=acc, epoch_time=epoch_time,
         )
     )
+
+def plot_history(depth, widen_factor):
+    history = np.load("model/WRN_{}_{}/history.npy".format(depth, widen_factor), allow_pickle=True).item()
+    plt.figure(figsize=(12,8))
+    plt.plot(history["accuracy"])
+    plt.plot(history["loss"])
+    plt.savefig("model/WRN_{}_{}/history.png".format(depth, widen_factor))
