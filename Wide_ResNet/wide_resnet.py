@@ -43,7 +43,7 @@ class Block(nn.Module):
 
         out = self.bn2(out)
         out = self.relu(out)
-        out = self.dropout(out)
+        out = self.dropout(out) # https://github.com/meliketoy/wide-resnet.pytorch/ puts dropout layer before bn2
         out = self.conv2(out)
 
         if self.downsample:
