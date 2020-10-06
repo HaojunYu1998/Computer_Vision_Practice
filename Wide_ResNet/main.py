@@ -20,7 +20,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from wide_resnet import WideResNet
 
 from utils import (
-    AverageMeter, adjust_learning_rate, conv_init, get_hms,
+    adjust_learning_rate, conv_init, get_hms, AverageMeter, Config_CIFAR10
 )
 
 def parse_option():
@@ -199,12 +199,12 @@ def main(args):
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
+            transforms.Normalize(Config_CIFAR10.mean, Config_CIFAR10.std),
         ])
 
         transform_test = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
+            transforms.Normalize(Config_CIFAR10.mean, Config_CIFAR10.std),
         ])
     elif args.augment == "zac": 
         # To Do: ZCA whitening

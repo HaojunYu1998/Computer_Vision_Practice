@@ -55,7 +55,22 @@ def conv_init(module):
     elif classname.find('BatchNorm') != -1:
         init.constant_(module.weight, 1)
         init.constant_(module.bias, 0)
-	
+
+def adjust_learning_rate(lr, epoch, decay_epochs):
+    return lr * 0.2 if (epoch+1) in decay_epochs else lr
+
+def get_hms(seconds):
+    m, s = divmod(seconds, 60)
+    h, m = divmod(m, 60)
+    return h, m, s
+
+def plot_history(depth, widen_factor):
+    history = np.load("model/WRN_{}_{}/history.npy".format(depth, widen_factor), allow_pickle=True).item()
+    plt.figure(figsize=(12,8))
+    plt.plot(history["accuracy"])
+    plt.plot(history["loss"])
+    plt.savefig("model/WRN_{}_{}/history.png".format(depth, widen_factor))
+
 class AverageMeter(object):
     """Computes and stores the average and current value"""
 
@@ -78,17 +93,6 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-def adjust_learning_rate(lr, epoch, decay_epochs):
-    return lr * 0.2 if (epoch+1) in decay_epochs else lr
-
-def get_hms(seconds):
-    m, s = divmod(seconds, 60)
-    h, m = divmod(m, 60)
-    return h, m, s
-
-def plot_history(depth, widen_factor):
-    history = np.load("model/WRN_{}_{}/history.npy".format(depth, widen_factor), allow_pickle=True).item()
-    plt.figure(figsize=(12,8))
-    plt.plot(history["accuracy"])
-    plt.plot(history["loss"])
-    plt.savefig("model/WRN_{}_{}/history.png".format(depth, widen_factor))
+class Config_CIFAR10():
+    mean = [0.4914, 0.4822, 0.4465]
+    std = [0.2023, 0.1994, 0.2010]
