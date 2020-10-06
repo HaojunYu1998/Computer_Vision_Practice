@@ -9,144 +9,149 @@ import torch.utils.data as data
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
+import torchvision
+import torchvision.transforms as transforms
+
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 from PIL import Image
 from sklearn.metrics import accuracy_score
 from typing import Any, Callable, List, Optional, Tuple
 from wide_resnet import WideResNet
-from dataset import CIFAR10
-from utils import transform, target_transform, AverageMeter, adjust_learning_rate, print_info, save_model
+
+from utils import (
+    AverageMeter, adjust_learning_rate, get_hms,
+)
 
 def parse_option():
 
     parser = argparse.ArgumentParser("argument for training")
+
+    # model hyperparamters
     parser.add_argument("--lr", default=0.1, type=float, help="learning rate")
     parser.add_argument("--depth", default=28, type=int, help="depth of the model")
     parser.add_argument("--widen_factor", default=10, type=int, help="widen factor of the model")
-    parser.add_argument("--dropout", default=0.3, type=float, help="dropout rate")
-    parser.add_argument("--resume", default="", type=str, metavar="PATH", help="path to latest checkpoint (default: none)")
+    parser.add_argument("--num_classes", default=10, type=int, help="number of classes")
+    parser.add_argument("--dropout_rate", default=0.3, type=float, help="dropout rate")
     parser.add_argument("--epochs", type=int, default=200, help="number of training epochs")
+    parser.add_argument("--batch_size", type=int, default=128, help="batch size")
     parser.add_argument("--lr_decay_epochs", type=str, default="60,120,160", help="where to decay lr, can be a list")
     parser.add_argument("--lr_decay_rate", type=float, default=0.2, help="decay rate for learning rate")
-    parser.add_argument("--gpu", default=None, type=int, help="GPU id to use")
-    parser.add_argument("--print_freq", type=int, default=1, help="print frequency")
+    parser.add_argument("--augment", type=str, default="meanstd", choices=["meanstd", "zac"], help="")
+    
+    # settings
+    parser.add_argument("--resume", default="", type=str, metavar="PATH", help="path to latest checkpoint (default: none)")
+    parser.add_argument("--test_only", action="store_true", default=False, help="test only")
     parser.add_argument("--save_freq", type=int, default=10, help="save frequency")
 
     args = parser.parse_args()
 
     return args
 
-def train_one_epoch(train_loader, model, criterion, optimizer, learning_rate, gpu=1) -> Any:
-    n_batch = len(train_loader)
+def train_one_epoch(args, train_loader, model, criterion, optimizer) -> Any:
+    n_batch = (len(train_loader.dataset)//batch_size)+1
     model.train()
 
-    loss_meter = AverageMeter()
     acc_meter = AverageMeter()
 
-    for dx, batch in enumerate(train_loader):
-        img, label = batch
-        img = torch.Tensor(img).to(torch.device(gpu))
-        label = torch.Tensor(label).view(-1,1).to(torch.device(gpu))
-        batch_size = img.shape[0]
+    for batch_idx, (inputs, targets) in enumerate(train_loader):
+        if torch.cuda.is_available():
+            inputs, targets = inputs.cuda(), targets.cuda()
 
-        out = model(img)
-        loss = criterion(out, label.long().squeeze())
         optimizer.zero_grad()
+        inputs, targets = Variable(inputs), Variable(targets)
+        outputs = model(inputs)
+        loss = criterion(outputs, targets)
         loss.backward()
+
         for param_group in optimizer.param_groups:
-            param_group["lr"] = learning_rate
+            param_group["lr"] = args.lr
         optimizer.step()
 
-        preds = out.argmax(dim=1)
-        acc = accuracy_score(label.cpu().long().squeeze(), preds.cpu().long().squeeze())
-        acc_meter.update(acc, batch_size)
-        loss_meter.update(loss.item(), batch_size)
+        predicts = out.argmax(dim=1)
+        acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
+        acc_meter.update(acc, args.batch_size)
 
-        #torch.cuda.synchronize()
+        sys.stdout.write("\r")
+        sys.stdout.write("| Epoch [%3d/%3d] Iter[%3d/%3d]\t\tLoss: %.4f Acc: %.3f%%"
+                %(epoch, args.epochs, batch_idx+1, n_batch, loss.item(), acc_meter.avg))
+        sys.stdout.flush()
+
+        torch.cuda.synchronize()
         
     return loss_meter, acc_meter
     
-def train(
-    depth: int,
-    widen_factor: int,
-    dropout_rate: float=0.3,
-    num_classes: int=10,
-    num_epochs: int=200,
-    lr: float=0.1,
-    decay_epochs: List=[60, 120, 160],
-    verbose: bool=True,
-    print_freq: int=10,
-    save_freq: int=10,
-    gpu: int=1,
-) -> None:
-    torch.manual_seed(2020)
-    torch.backends.cudnn.deterministic = True
-    np.random.seed(2020)
-    torch.backends.cudnn.benchmark = False
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+def train(args, train_loader, model):
+
     model_folder = os.path.join("model/","WRN_{}_{}/".format(depth, widen_factor))
-
-    train_loader = DataLoader(CIFAR10("./data", True, transform, target_transform), batch_size=128, shuffle=True)
-    print("finish loading data!")
-
-    model = WideResNet(depth, widen_factor, dropout_rate, num_classes)
-    model = model.to(torch.device(gpu))
-    print("finish creating model!")
 
     params = [p for p in model.parameters() if p.requires_grad]
     optimizer = torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=0.0005)
     criterion = nn.CrossEntropyLoss()
 
-    num_epochs = 200
+    print("Start training!")
 
-    epoch_time = AverageMeter()
-    print("start training!")
+    elapsed_time = 0
+    history = {"acc": [], "loss": []}
 
-    since = time.time()
-    history = {"accuracy": [], "loss": []}
-    for epoch in range(1, num_epochs+1):
+    print("| Training Epochs = {}".format(args.epochs))
+    print("| Initial Learning Rate = {}".format(args.lr))
 
-        lr = adjust_learning_rate(lr, epoch, decay_epochs)
-        loss, acc = train_one_epoch(train_loader, model, criterion, optimizer, lr, gpu)
-        epoch_time.update(time.time() - since)
+    for epoch in range(1, args.epochs+1):
 
-        if verbose and epoch % print_freq == 0:
-            print_info(epoch, num_epochs, loss, acc, epoch_time)
-            history["accuracy"].append(acc.avg)
-            history["loss"].append(loss.avg)
+        start_time = time.time()
+        args.lr = adjust_learning_rate(args.lr, epoch, decay_epochs)
+
+        print("\n=> Training Epoch #%d, LR=%.4f" %(epoch, args.lr))
+        loss, acc = train_one_epoch(args, train_loader, model, criterion, optimizer)
+        epoch_time = time.time() - start_time
+        elapsed_time += epoch_time
+        print("| Elapsed time : %d:%02d:%02d"  %(get_hms(elapsed_time)))
+
+        history["acc"].append(acc.avg)
+        history["loss"].append(loss.avg)
 
         if epoch % save_freq == 0:
-            save_model(model, optimizer, epoch, "ckpt_epoch_{epoch}.pth".format(epoch=epoch), model_folder)
-    save_model(model, optimizer, num_epochs, "current.pth", model_folder)
+            save_file = os.path.join(model_folder, file_name)
+            print("==> Saving model at {}...".format(save_file))
+            state = {
+                "model": model.state_dict(),
+                "optimizer": optimizer.state_dict(),
+                "epoch": epoch,
+                "opt": opt,
+            }
+            
+            torch.save(state, save_file)
+    del state
+    
+    save_model(model, optimizer, args.epochs, "current.pth", model_folder)
     torch.cuda.empty_cache()
-    print("finish training!")
-    np.save("./model/WRN_{}_{}/history.npy".format(depth, widen_factor), history)
+    
+    print("Finish Training!")
+    np.save("./model/WRN_{}_{}/history.npy".format(args.depth, args,widen_factor), history)
 
-def test(
-    depth: int,
-    widen_factor: int,
-    gpu: int=1,
-) -> Any:
-    print("Test WRN_{}_{}".format(depth, widen_factor))
-    test_loader = DataLoader(CIFAR10("./data", False, transform, target_transform), batch_size=128, shuffle=True)
-    checkpoint = torch.load("./model/WRN_{}_{}/current.pth".format(depth, widen_factor), map_location="cpu")
-    model = WideResNet(checkpoint["depth"], checkpoint["widen_factor"], checkpoint["dropout_rate"], checkpoint["num_classes"])
-    model.load_state_dict(checkpoint["model"])
-    model = model.to(torch.device(gpu))
+def test(args, test_loader, model):
+
+    if torch.cuda.is_available():
+        model = torch.nn.DataParallel(model, device_ids=range(torch.cuda.device_count()))
+        cudnn.benchmark = True
+    
     model.eval()
+    model.training = False
+
     acc_meter = AverageMeter()
-    for idx, batch in enumerate(test_loader):
-        img, label = batch
-        img = torch.FloatTensor(img).view(-1,3,32,32).to(torch.device(gpu))
-        label = torch.FloatTensor(label).view(-1,1).to(torch.device(gpu))
-        batch_size = img.shape[0]
-        out = model(img)
-        preds = out.argmax(dim=1)
-        acc = accuracy_score(label.cpu().long().squeeze(), preds.cpu().long().squeeze())
-        acc_meter.update(acc, batch_size)
-    print("test accuracy: {}".format(acc_meter.avg))
-    np.save("./model/WRN_{}_{}/accuracy.npy".format(depth, widen_factor), np.array([acc_meter.avg]))
+    for idx, (inputs, targets) in enumerate(test_loader):
+        if torch.cuda.is_available():
+            inputs, targets = inputs.cuda(), targets.cuda()
+
+        inputs, targets = Variable(inputs), Variable(targets)
+        outputs = model(inputs)
+        _, predicts = torch.argmax(outputs.data, dim=1)
+
+        acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
+        acc_meter.update(acc, args.batch_size)
+
+    print("| Test Result\tAcc: %.3f%%" %(acc_meter.avg))
     return acc_meter
 
 def main(args):
@@ -154,18 +159,79 @@ def main(args):
     torch.manual_seed(0)
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
-    
-    transform_train = transforms.Compose([
-        transforms.RandomCrop(32, padding=4),
-        transforms.RandomHorizontalFlip(),
-        transforms.ToTensor(),
-        transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
-    ]) # meanstd transformation
 
-    transform_test = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
-    ])
+    # Constructing Model
+
+    if args.resume:
+        if os.path.isfile(args.resume):
+            print("=> Loading checkpoint '{}'".format(args.resume))
+            checkpoint = torch.load(args.resume, map_location="cpu")
+            test_only = args.test_only
+            args = checkpoint["opt"]
+            args.test_only = test_only
+            args.resume = True
+        else:
+            checkpoint = None
+            print("=> No checkpoint found at '{}'".format(args.resume))
+
+    model = WideResNet(args.depth, args.widen_factor, args.dropout_rate, args.num_classes)
+
+    if args.resume:
+        model.load_state_dict(checkpoint["model"])
+        print(
+            "=> Loaded successfully '{}' (epoch {})".format(
+                args.resume, checkpoint["epoch"]
+            )
+        )
+        del checkpoint
+        torch.cuda.empty_cache()
+
+    if torch.cuda.is_available():
+        model.cuda()
+        model = torch.nn.DataParallel(model, device_ids=range(torch.cuda.device_count()))
+
+    # Loading Dataset    
+
+    if args.augment == "meanstd":
+        transform_train = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
+        ])
+
+        transform_test = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
+        ])
+    elif args.augment == "zac": 
+        # To Do: ZCA whitening
+        pass
+    else:
+        raise NotImplementedError
+
+    print("| Preparing CIFAR-10 dataset...")
+    sys.stdout.write("| ")
+    trainset = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform_train)
+    testset = torchvision.datasets.CIFAR10(root="./data", train=False, download=False, transform=transform_test)
+    
+    train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+    test_loader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+
+    # Test only
+
+    if args.test_only:
+        if args.resume:
+            
+            test(args, test_loader, model)
+            sys.exit(0)
+        else:
+            print("=> Test only model need to resume from a checkpoint")
+            raise RuntimeError
+
+    train(args, train_loader, model)
+    test(args, test_loader, model)
+
 
 if __name__ == "__main__":
 
