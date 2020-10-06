@@ -12,7 +12,7 @@ from torch.utils.data import DataLoader
 from PIL import Image
 from sklearn.metrics import accuracy_score
 from typing import Any, Callable, List, Optional, Tuple
-from utils import conv3x3, conv1x1, transform, target_transform
+from utils import conv3x3, conv1x1, conv_init, transform, target_transform
 
 class Block(nn.Module):
     def __init__(
@@ -21,38 +21,39 @@ class Block(nn.Module):
         planes: int,
         stride: int=1,
         downsample: Optional[Callable]=None,
-        dropout_rate: int=0.5
+        dropout_rate: int=0.3,
     ) -> None:
         super().__init__()
         self.inplanes = inplanes
         self.planes = planes
         self.bn1 = nn.BatchNorm2d(self.inplanes)
-        self.conv1 = conv3x3(self.inplanes, self.planes, stride)
+        self.conv1 = conv3x3(self.inplanes, self.planes)
+        self.dropout = nn.Dropout(dropout_rate)
         self.bn2 = nn.BatchNorm2d(self.planes)
-        self.conv2 = conv3x3(self.planes, self.planes)
+        self.conv2 = conv3x3(self.planes, self.planes, stride)
         self.relu = nn.ReLU(inplace=True)
         self.downsample = downsample
         self.stride = stride
-        self.dropout = nn.Dropout(dropout_rate)
+        
 
     def forward(self, x):
+        
         identity = x
         out = self.bn1(x)
         out = self.relu(out)
         out = self.conv1(out)
-
+        out = self.dropout(out)
         out = self.bn2(out)
         out = self.relu(out)
-        out = self.dropout(out) # https://github.com/meliketoy/wide-resnet.pytorch/ puts dropout layer before bn2
         out = self.conv2(out)
 
         if self.downsample:
-            identity = self.downsample(x)
+            identity = self.downsample(identity)
 
         out += identity
         return out
 
-lass WideResNet(nn.Module):
+class WideResNet(nn.Module):
     def __init__(self, depth, widen_factor, dropout_rate, num_classes):
         '''
         Args:
@@ -66,15 +67,16 @@ lass WideResNet(nn.Module):
         assert (depth - 4) % 6 == 0, 'Depth of Wide ResNet should be 6n+4'
         self.depth = depth
         self.widen_factor = widen_factor
-        self.widths = [int(width * widen_factor) for width in (16, 32, 64)]
-        self.inplanes = 16
+        self.stages = [16, 32, 64]
+        self.widths = [int(width * widen_factor) for width in self.stages]
         self.dropout_rate = dropout_rate
         self.num_classes = num_classes
         self.num_blocks = (self.depth - 4) // 6
-        self.conv1 = nn.Conv2d(3, 16, kernel_size=3, stride=1, padding=1, bias=False)
-        self.conv2 = self._make_layer(self.inplanes, self.widths[0], stride=1, padding=0)
+        self.conv1 = conv3x3(3, self.stages[0])
+        self.conv2 = self._make_layer(self.stages[0], self.widths[0], stride=1, padding=0)
         self.conv3 = self._make_layer(self.widths[0], self.widths[1], stride=2, padding=0)
         self.conv4 = self._make_layer(self.widths[1], self.widths[2], stride=2, padding=0)
+        self.bn = nn.BatchNorm2d(self.widths[2], momentum=0.9)
         self.relu = nn.ReLU(inplace=True)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc = nn.Linear(self.widths[2], num_classes)
@@ -84,26 +86,24 @@ lass WideResNet(nn.Module):
         if stride != 1 or inplanes != planes:
             downsample = nn.Sequential(
                 conv1x1(inplanes, planes, stride=stride, padding=padding),
-                nn.BatchNorm2d(planes),
             )
         layers = []
         layers.append(Block(inplanes, planes, stride, downsample, self.dropout_rate))
         self.inplanes = planes
         for _ in range(1, self.num_blocks):
             layers.append(Block(self.inplanes, planes, dropout_rate=self.dropout_rate))
-        return nn.Sequential(*layers)
-
-    def _forward_impl(self, x):
-        x = self.conv1(x)
-        x = self.conv2(x)
-        x = self.conv3(x)
-        x = self.conv4(x)
-        x = self.relu(x)
-        x = self.avgpool(x)
-        x = torch.flatten(x, 1)
-        x = self.fc(x)
-
-        return x
+        return nn.Sequential(*layers)      
 
     def forward(self, x):
-        return self._forward_impl(x)
+        
+        out = self.conv1(x)
+        out = self.conv2(out)
+        out = self.conv3(out)
+        out = self.conv4(out)
+        out = self.bn(out)
+        out = self.relu(out)
+        out = F.avg_pool2d(out, 8)
+        out = torch.flatten(out, 1)
+        out = self.fc(out)
+        
+        return out

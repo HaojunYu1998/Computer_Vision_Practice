@@ -41,10 +41,20 @@ def target_transform(label):
 
 def conv3x3(in_planes, out_planes, stride=1, padding=1):
     """3x3 convolution with padding"""
-    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=padding, bias=False)
+    return nn.Conv2d(in_planes, out_planes, kernel_size=3, stride=stride, padding=padding, bias=True)
 
 def conv1x1(in_planes, out_planes, stride=1, padding=1):
     """1x1 convolution with padding"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, padding=padding, bias=True)
+
+def conv_init(module):
+    classname = module.__class__.__name__
+    if classname.find('Conv') != -1:
+        init.xavier_uniform_(module.weight, gain=np.sqrt(2))
+        init.constant_(module.bias, 0)
+    elif classname.find('BatchNorm') != -1:
+        init.constant_(module.weight, 1)
+        init.constant_(module.bias, 0)
 	
 class AverageMeter(object):
     """Computes and stores the average and current value"""

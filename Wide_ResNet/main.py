@@ -20,7 +20,7 @@ from typing import Any, Callable, List, Optional, Tuple
 from wide_resnet import WideResNet
 
 from utils import (
-    AverageMeter, adjust_learning_rate, get_hms,
+    AverageMeter, adjust_learning_rate, conv_init, get_hms,
 )
 
 def parse_option():
@@ -127,7 +127,7 @@ def train(args, train_loader, model):
     save_model(model, optimizer, args.epochs, "current.pth", model_folder)
     torch.cuda.empty_cache()
     
-    print("Finish Training!")
+    print("=> Finish training")
     np.save("./model/WRN_{}_{}/history.npy".format(args.depth, args,widen_factor), history)
 
 def test(args, test_loader, model):
@@ -185,6 +185,8 @@ def main(args):
         )
         del checkpoint
         torch.cuda.empty_cache()
+    else:
+        model.apply(conv_init)
 
     if torch.cuda.is_available():
         model.cuda()
