@@ -11,5 +11,5 @@ git clone https://github.com/HaojunYuPKU/Computer_Vision_Practice
 , and run in folder Wide_ResNet
 
 ``
-python main --depth 28 --widen_factor 10 
+python main.py --depth 28 --widen_factor 10 
 ``
