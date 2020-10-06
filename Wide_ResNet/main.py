@@ -56,12 +56,22 @@ def parse_option():
 
     return opt
 
-def train_one_epoch(args, train_loader, model, criterion, optimizer):
+def train_one_epoch(args, train_loader, model, epoch, history):
     
-    n_batch = (len(train_loader.dataset)//args.batch_size)+1
     model.train()
-
+    model.training = True
+    args.lr = adjust_learning_rate(args.lr, epoch, args.lr_decay_rate, args.lr_decay_epochs)
+    optimizer = SGD(
+        model.parameters(), 
+        lr=args.lr, 
+        momentum=args.momentum, 
+        weight_decay=args.weight_decay
+    )
+    criterion = nn.CrossEntropyLoss()
     acc_meter = AverageMeter()
+    n_batch = (len(train_loader.dataset)//args.batch_size)+1
+
+    print("\n=> Training Epoch #%d, LR=%.4f" %(epoch, args.lr))
 
     for batch_idx, (inputs, targets) in enumerate(train_loader):
         if torch.cuda.is_available():
@@ -87,38 +97,28 @@ def train_one_epoch(args, train_loader, model, criterion, optimizer):
         sys.stdout.flush()
 
         torch.cuda.synchronize()
-        
-    return loss_meter, acc_meter
     
-def train(args, train_loader, model):
+    history["acc"].append(acc_meter.avg)
+    history["loss"].append(loss_meter.avg)   
+    
+def train(args, train_loader, valid_loader, model):
 
     model_folder = os.path.join("model/","WRN_{}_{}/".format(args.depth, args.widen_factor))
-
-    optimizer = SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    criterion = nn.CrossEntropyLoss()
+    history = {"acc": [], "loss": []}
+    elapsed_time = 0
 
     print("Start training!")
-
-    elapsed_time = 0
-    history = {"acc": [], "loss": []}
-
     print("| Training Epochs = {}".format(args.epochs))
     print("| Initial Learning Rate = {}".format(args.lr))
 
     for epoch in range(args.start_epoch, args.epochs+1):
 
         start_time = time.time()
-        args.lr = adjust_learning_rate(args.lr, epoch, args.lr_decay_rate, args.lr_decay_epochs)
-
-        print("\n=> Training Epoch #%d, LR=%.4f" %(epoch, args.lr))
-        loss, acc = train_one_epoch(args, train_loader, model, criterion, optimizer)
-        epoch_time = time.time() - start_time
-        elapsed_time += epoch_time
+        train_one_epoch(args, train_loader, model, epoch, history)
+        valid_one_epoch(args, valid_loader, model, epoch)
+        elapsed_time += (time.time() - start_time)
         print("| Elapsed time : %d:%02d:%02d"  %(get_hms(elapsed_time)))
-
-        history["acc"].append(acc.avg)
-        history["loss"].append(loss.avg)
-
+        
         if epoch % save_freq == 0:
             file_name = model_folder + "ckpt_epoch_{}.pth".format(epoch)
             save_file = os.path.join(model_folder, file_name)
@@ -129,10 +129,10 @@ def train(args, train_loader, model):
                 "epoch": epoch,
                 "opt": opt,
             }
-            
             torch.save(state, save_file)
-    del state
+            del state
 
+    print("=> Finish training")
     print("==> Saving model at {}...".format(save_file))
     file_name = model_folder + "current.pth"
     save_file = os.path.join(model_folder, file_name)
@@ -142,34 +142,40 @@ def train(args, train_loader, model):
         "epoch": epoch,
         "opt": opt,
     }
-    torch.cuda.empty_cache()
-    
-    print("=> Finish training")
+    del state
     np.save("./model/WRN_{}_{}/history.npy".format(args.depth, args.widen_factor), history)
+    torch.cuda.empty_cache()
 
-def test(args, test_loader, model):
-
-    if torch.cuda.is_available():
-        model = torch.nn.DataParallel(model, device_ids=range(torch.cuda.device_count()))
-        cudnn.benchmark = True
+def _test(args, test_loader, model):
     
     model.eval()
     model.training = False
 
     acc_meter = AverageMeter()
+    criterion = nn.CrossEntropyLoss()
+
     for idx, (inputs, targets) in enumerate(test_loader):
         if torch.cuda.is_available():
             inputs, targets = inputs.cuda(), targets.cuda()
 
-        inputs, targets = Variable(inputs), Variable(targets)
-        outputs = model(inputs)
-        _, predicts = torch.max(outputs.data, 1)
+        with torch.no_grad():
+            inputs, targets = Variable(inputs), Variable(targets)
+            outputs = model(inputs)
+            loss = criterion(outputs, targets)
+            _, predicts = torch.max(outputs.data, 1)
 
         acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
         acc_meter.update(acc, args.batch_size)
 
+    return loss, acc_meter
+
+def test(args, test_loader, model):
+    loss, acc_meter = _test(args, test_loader, model)
     print("| Test Result\tAcc: %.3f%%" %(acc_meter.avg))
-    return acc_meter
+
+def valid_one_epoch(args, test_loader, model, epoch):
+    loss, acc_meter = _test(args, test_loader, model)
+    print("\n| Validation Epoch #%d\t\t\tLoss: %.4f Acc@1: %.2f%%" %(epoch, loss.item(), acc_meter.avg))
 
 def main(args):
     np.random.seed(0)
@@ -249,7 +255,7 @@ def main(args):
             print("=> Test only model need to resume from a checkpoint")
             raise RuntimeError
 
-    train(args, train_loader, model)
+    train(args, train_loader, test_loader, model)
     test(args, test_loader, model)
 
 
