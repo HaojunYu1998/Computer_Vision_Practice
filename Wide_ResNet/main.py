@@ -1,6 +1,8 @@
-mport os
+import os
 import time
 import pickle
+import argparse
+import warnings
 import numpy as np
 import torch
 import torch.utils.data as data
@@ -15,6 +17,25 @@ from typing import Any, Callable, List, Optional, Tuple
 from wide_resnet import WideResNet
 from dataset import CIFAR10
 from utils import transform, target_transform, AverageMeter, adjust_learning_rate, print_info, save_model
+
+def parse_option():
+
+    parser = argparse.ArgumentParser("argument for training")
+    parser.add_argument("--lr", default=0.1, type=float, help="learning rate")
+    parser.add_argument("--depth", default=28, type=int, help="depth of the model")
+    parser.add_argument("--widen_factor", default=10, type=int, help="widen factor of the model")
+    parser.add_argument("--dropout", default=0.3, type=float, help="dropout rate")
+    parser.add_argument("--resume", default="", type=str, metavar="PATH", help="path to latest checkpoint (default: none)")
+    parser.add_argument("--epochs", type=int, default=200, help="number of training epochs")
+    parser.add_argument("--lr_decay_epochs", type=str, default="60,120,160", help="where to decay lr, can be a list")
+    parser.add_argument("--lr_decay_rate", type=float, default=0.2, help="decay rate for learning rate")
+    parser.add_argument("--gpu", default=None, type=int, help="GPU id to use")
+    parser.add_argument("--print_freq", type=int, default=1, help="print frequency")
+    parser.add_argument("--save_freq", type=int, default=10, help="save frequency")
+
+    args = parser.parse_args()
+
+    return args
 
 def train_one_epoch(train_loader, model, criterion, optimizer, learning_rate, gpu=1) -> Any:
     n_batch = len(train_loader)
@@ -128,6 +149,27 @@ def test(
     np.save("./model/WRN_{}_{}/accuracy.npy".format(depth, widen_factor), np.array([acc_meter.avg]))
     return acc_meter
 
+def main(args):
+    np.random.seed(0)
+    torch.manual_seed(0)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
+    ]) # meanstd transformation
+
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize(cf.mean[args.dataset], cf.std[args.dataset]),
+    ])
+
 if __name__ == "__main__":
-    train(28, 10, print_freq=1)
+
+    warnings.simplefilter("once", UserWarning)
+    args = parse_option()
+    main(args)
                                                                                                                                    125,31        Bo
