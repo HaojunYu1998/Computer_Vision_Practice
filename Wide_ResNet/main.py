@@ -57,7 +57,8 @@ def parse_option():
     return opt
 
 def train_one_epoch(args, train_loader, model, criterion, optimizer):
-    n_batch = (len(train_loader.dataset)//batch_size)+1
+    
+    n_batch = (len(train_loader.dataset)//args.batch_size)+1
     model.train()
 
     acc_meter = AverageMeter()
@@ -76,7 +77,7 @@ def train_one_epoch(args, train_loader, model, criterion, optimizer):
             param_group["lr"] = args.lr
         optimizer.step()
 
-        predicts = out.argmax(dim=1)
+        _, predicts = torch.argmax(outputs.data, dim=1)
         acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
         acc_meter.update(acc, args.batch_size)
 
