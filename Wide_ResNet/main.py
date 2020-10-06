@@ -102,7 +102,7 @@ def train(args, train_loader, model):
     for epoch in range(args.start_epoch, args.epochs+1):
 
         start_time = time.time()
-        args.lr = adjust_learning_rate(args.lr, epoch, decay_epochs)
+        args.lr = adjust_learning_rate(args.lr, epoch, args.lr_decay_epochs)
 
         print("\n=> Training Epoch #%d, LR=%.4f" %(epoch, args.lr))
         loss, acc = train_one_epoch(args, train_loader, model, criterion, optimizer)
