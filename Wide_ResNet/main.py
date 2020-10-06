@@ -121,7 +121,7 @@ def train(args, train_loader, valid_loader, model):
             state = {
                 "model": model.state_dict(),
                 "epoch": epoch,
-                "opt": opt,
+                "opt": args,
             }
             torch.save(state, save_file)
             del state
@@ -133,7 +133,7 @@ def train(args, train_loader, valid_loader, model):
     state = {
         "model": model.state_dict(),
         "epoch": epoch,
-        "opt": opt,
+        "opt": args,
     }
     del state
     np.save(model_folder + "history.npy".format(args.depth, args.widen_factor), history)
