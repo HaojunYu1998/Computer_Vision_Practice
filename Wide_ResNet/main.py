@@ -77,7 +77,7 @@ def train_one_epoch(args, train_loader, model, criterion, optimizer):
             param_group["lr"] = args.lr
         optimizer.step()
 
-        _, predicted = torch.max(outputs.data, 1)
+        _, predicts = torch.max(outputs.data, 1)
         acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
         acc_meter.update(acc, args.batch_size)
 
@@ -163,7 +163,7 @@ def test(args, test_loader, model):
 
         inputs, targets = Variable(inputs), Variable(targets)
         outputs = model(inputs)
-        _, predicted = torch.max(outputs.data, 1)
+        _, predicts = torch.max(outputs.data, 1)
 
         acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
         acc_meter.update(acc, args.batch_size)
