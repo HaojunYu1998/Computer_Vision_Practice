@@ -88,7 +88,7 @@ def train(args, train_loader, model):
 
     model_folder = os.path.join("model/","WRN_{}_{}/".format(args.depth, args.widen_factor))
 
-    optimizer = optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
+    optimizer = SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     criterion = nn.CrossEntropyLoss()
 
     print("Start training!")
