@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
+import torch.optim.SGD as SGD
 import torch.utils.data.DataLoader as DataLoader
 
 import torchvision
@@ -41,10 +42,13 @@ def parse_option():
     parser.add_argument("--batch_size", type=int, default=128, help="batch size")
     parser.add_argument("--lr_decay_epochs", type=str, default="60,120,160", help="where to decay lr, can be a list")
     parser.add_argument("--lr_decay_rate", type=float, default=0.2, help="decay rate for learning rate")
+    parser.add_argument("--momentum", default=0.9, type=float, help="momentum for SGD optimizer")
+    parser.add_argument("--weight_decay", default=5e-4, type=float, help="weight decay for SGD optimizer")
     parser.add_argument("--augment", type=str, default="meanstd", choices=["meanstd", "zac"], help="")
     
     # settings
     parser.add_argument("--resume", default="", type=str, metavar="PATH", help="path to latest checkpoint (default: none)")
+    parser.add_argument("--start_epoch", default=1, type=int, help="start epoch")
     parser.add_argument("--test_only", action="store_true", default=False, help="test only")
     parser.add_argument("--save_freq", type=int, default=10, help="save frequency")
 
@@ -87,10 +91,9 @@ def train_one_epoch(args, train_loader, model, criterion, optimizer) -> Any:
     
 def train(args, train_loader, model):
 
-    model_folder = os.path.join("model/","WRN_{}_{}/".format(depth, widen_factor))
+    model_folder = os.path.join("model/","WRN_{}_{}/".format(args.depth, args.widen_factor))
 
-    params = [p for p in model.parameters() if p.requires_grad]
-    optimizer = torch.optim.SGD(params, lr=lr, momentum=0.9, weight_decay=0.0005)
+    optimizer = SGD(model.parameters(), lr=args.lr, momentum=args.momentum, weight_decay=args.weight_decay)
     criterion = nn.CrossEntropyLoss()
 
     print("Start training!")
@@ -101,7 +104,7 @@ def train(args, train_loader, model):
     print("| Training Epochs = {}".format(args.epochs))
     print("| Initial Learning Rate = {}".format(args.lr))
 
-    for epoch in range(1, args.epochs+1):
+    for epoch in range(args.start_epoch, args.epochs+1):
 
         start_time = time.time()
         args.lr = adjust_learning_rate(args.lr, epoch, decay_epochs)
@@ -116,6 +119,7 @@ def train(args, train_loader, model):
         history["loss"].append(loss.avg)
 
         if epoch % save_freq == 0:
+            file_name = model_folder + "ckpt_epoch_{}.pth".format(epoch)
             save_file = os.path.join(model_folder, file_name)
             print("==> Saving model at {}...".format(save_file))
             state = {
@@ -127,12 +131,20 @@ def train(args, train_loader, model):
             
             torch.save(state, save_file)
     del state
-    
-    save_model(model, optimizer, args.epochs, "current.pth", model_folder)
+
+    print("==> Saving model at {}...".format(save_file))
+    file_name = model_folder + "current.pth"
+    save_file = os.path.join(model_folder, file_name)
+    state = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "epoch": epoch,
+        "opt": opt,
+    }
     torch.cuda.empty_cache()
     
     print("=> Finish training")
-    np.save("./model/WRN_{}_{}/history.npy".format(args.depth, args,widen_factor), history)
+    np.save("./model/WRN_{}_{}/history.npy".format(args.depth, args.widen_factor), history)
 
 def test(args, test_loader, model):
 
@@ -182,6 +194,7 @@ def main(args):
 
     if args.resume:
         model.load_state_dict(checkpoint["model"])
+        args.start_epoch = checkpoint["epoch"]
         print(
             "=> Loaded successfully '{}' (epoch {})".format(
                 args.resume, checkpoint["epoch"]
