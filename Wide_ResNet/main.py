@@ -5,13 +5,16 @@ import pickle
 import argparse
 import warnings
 import numpy as np
+
 import torch
-import torch.utils.data as data
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
+import torch.utils.data.DataLoader as DataLoader
+
 import torchvision
 import torchvision.transforms as transforms
+import torchvision.datasets.CIFAR10 as CIFAR10
 
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
@@ -215,11 +218,11 @@ def main(args):
 
     print("| Preparing CIFAR-10 dataset...")
     sys.stdout.write("| ")
-    trainset = torchvision.datasets.CIFAR10(root="./data", train=True, download=True, transform=transform_train)
-    testset = torchvision.datasets.CIFAR10(root="./data", train=False, download=False, transform=transform_test)
+    trainset = CIFAR10(root="./data", train=True, download=True, transform=transform_train)
+    testset = CIFAR10(root="./data", train=False, download=False, transform=transform_test)
     
-    train_loader = torch.utils.data.DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
-    test_loader = torch.utils.data.DataLoader(testset, batch_size=100, shuffle=False, num_workers=2)
+    train_loader = DataLoader(trainset, batch_size=args.batch_size, shuffle=True, num_workers=2)
+    test_loader = DataLoader(testset, batch_size=args.batch_size, shuffle=False, num_workers=2)
 
     # Test only
 
