@@ -93,6 +93,6 @@ class AverageMeter(object):
         self.count += n
         self.avg = self.sum / self.count
 
-class Config_CIFAR10():
-    mean = [0.4914, 0.4822, 0.4465]
-    std = [0.2023, 0.1994, 0.2010]
+class Config:
+    CIFAR10_mean = [0.4914, 0.4822, 0.4465]
+    CIFAR10_std = [0.2023, 0.1994, 0.2010]

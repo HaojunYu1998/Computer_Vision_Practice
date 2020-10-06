@@ -1,32 +1,29 @@
 import os
 import sys
 import time
-import pickle
 import argparse
 import warnings
 import numpy as np
+from sklearn.metrics import accuracy_score
+from wide_resnet import WideResNet
+from utils import adjust_learning_rate, conv_init, get_hms, AverageMeter, Config
+
 
 import torch
 import torch.nn as nn
 import torch.nn.init as init
 import torch.nn.functional as F
-import torch.optim as optim
-import torch.utils.data.DataLoader as DataLoader
+from torch.optim import SGD
+from torch.autograd import Variable
+from torch.utils.data import DataLoader
+
 
 import torchvision
 import torchvision.transforms as transforms
-import torchvision.datasets.CIFAR10 as CIFAR10
+import torchvision.datasets as datasets
 
-from torch.autograd import Variable
-from torch.utils.data import DataLoader
-from PIL import Image
-from sklearn.metrics import accuracy_score
-from typing import Any, Callable, List, Optional, Tuple
-from wide_resnet import WideResNet
 
-from utils import (
-    adjust_learning_rate, conv_init, get_hms, AverageMeter, Config_CIFAR10
-)
+
 
 def parse_option():
 
@@ -56,7 +53,7 @@ def parse_option():
 
     return args
 
-def train_one_epoch(args, train_loader, model, criterion, optimizer) -> Any:
+def train_one_epoch(args, train_loader, model, criterion, optimizer):
     n_batch = (len(train_loader.dataset)//batch_size)+1
     model.train()
 
@@ -216,12 +213,12 @@ def main(args):
             transforms.RandomCrop(32, padding=4),
             transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
-            transforms.Normalize(Config_CIFAR10.mean, Config_CIFAR10.std),
+            transforms.Normalize(Config.CIFAR10_mean, Config.CIFAR10_std),
         ])
 
         transform_test = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Normalize(Config_CIFAR10.mean, Config_CIFAR10.std),
+            transforms.Normalize(Config.CIFAR10_mean, Config.CIFAR10_std),
         ])
     elif args.augment == "zac": 
         # To Do: ZCA whitening
