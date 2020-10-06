@@ -43,7 +43,8 @@ def parse_option():
     parser.add_argument("--start_epoch", default=1, type=int, help="start epoch")
     parser.add_argument("--test_only", action="store_true", default=False, help="test only")
     parser.add_argument("--save_freq", type=int, default=10, help="save frequency")
-
+    parser.add_argument("--gpu", type=int, nargs="+", default=0, help="gpu ids to use")
+    
     opt = parser.parse_args()
 
     iterations = opt.lr_decay_epochs.split(",")
@@ -208,7 +209,7 @@ def main(args):
 
     if torch.cuda.is_available():
         model.cuda()
-        model = torch.nn.DataParallel(model, device_ids=range(torch.cuda.device_count()))
+        model = torch.nn.DataParallel(model, device_ids=args.gpu)
 
     # Loading Dataset    
 
