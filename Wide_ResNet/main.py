@@ -8,7 +8,6 @@ from sklearn.metrics import accuracy_score
 from wide_resnet import WideResNet
 from utils import adjust_learning_rate, conv_init, get_hms, AverageMeter, Config
 
-
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -17,10 +16,9 @@ from torch.optim import SGD
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
 
-
 import torchvision
 import torchvision.transforms as transforms
-import torchvision.datasets as datasets
+from torchvision.datasets import CIFAR10
 
 
 
