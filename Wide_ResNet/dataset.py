@@ -67,7 +67,7 @@ class CIFAR10(data.Dataset):
                     self.targets.extend(entry['fine_labels'])
 
         self.data = np.vstack(self.data).reshape(-1, 3, 32, 32)
-        # self.data = ZCA_whitening(self.data)
+        self.data = self.data.transpose((0, 2, 3, 1))  # convert to HWC
 
         self._load_meta()
 
@@ -79,15 +79,19 @@ class CIFAR10(data.Dataset):
             self.classes = data[self.meta['key']]
         self.class_to_idx = {_class: i for i, _class in enumerate(self.classes)}
 
-    def __getitem__(self, index: int) -> Any:
+    def __getitem__(self, index: int) -> Tuple[Any, Any]:
         """
         Args:
             index (int): Index
 
         Returns:
             tuple: (image, target) where target is index of the target class.
-        """                                                                                                                  89,1          78%
+        """
         img, target = self.data[index], self.targets[index]
+
+        # doing this so that it is consistent with all other datasets
+        # to return a PIL Image
+        img = Image.fromarray(img)
 
         if self.transform is not None:
             img = self.transform(img)
