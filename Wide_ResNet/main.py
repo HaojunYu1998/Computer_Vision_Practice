@@ -120,7 +120,6 @@ def train(args, train_loader, valid_loader, model):
             print("==> Saving model at {}...".format(save_file))
             state = {
                 "model": model.state_dict(),
-                "optimizer": optimizer.state_dict(),
                 "epoch": epoch,
                 "opt": opt,
             }
@@ -133,7 +132,6 @@ def train(args, train_loader, valid_loader, model):
     save_file = os.path.join(model_folder, file_name)
     state = {
         "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
         "epoch": epoch,
         "opt": opt,
     }
