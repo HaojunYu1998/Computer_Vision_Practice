@@ -92,7 +92,7 @@ def train_one_epoch(args, train_loader, model, epoch, history):
         acc_meter.update(acc, args.batch_size)
 
         sys.stdout.write("\r")
-        sys.stdout.write("| Epoch [%3d/%3d] Iter[%3d/%3d]\t\tLoss: %.4f Acc: %.3f%%"
+        sys.stdout.write("| Epoch [%d/%d] Iter[%d/%d]\t\tLoss: %.3f Acc: %.3f%%"
                 %(epoch, args.epochs, batch_idx+1, n_batch, loss.item(), acc_meter.avg))
         sys.stdout.flush()
 
