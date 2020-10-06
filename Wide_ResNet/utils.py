@@ -56,8 +56,8 @@ def conv_init(module):
         init.constant_(module.weight, 1)
         init.constant_(module.bias, 0)
 
-def adjust_learning_rate(lr, epoch, decay_epochs):
-    return lr * 0.2 if (epoch+1) in decay_epochs else lr
+def adjust_learning_rate(lr, epoch, decay_rate, decay_epochs):
+    return lr * decay_rate if (epoch+1) in decay_epochs else lr
 
 def get_hms(seconds):
     m, s = divmod(seconds, 60)

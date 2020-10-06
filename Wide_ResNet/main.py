@@ -47,9 +47,14 @@ def parse_option():
     parser.add_argument("--test_only", action="store_true", default=False, help="test only")
     parser.add_argument("--save_freq", type=int, default=10, help="save frequency")
 
-    args = parser.parse_args()
+    opt = parser.parse_args()
 
-    return args
+    iterations = opt.lr_decay_epochs.split(",")
+    opt.lr_decay_epochs = list([])
+    for it in iterations:
+        opt.lr_decay_epochs.append(int(it))
+
+    return opt
 
 def train_one_epoch(args, train_loader, model, criterion, optimizer):
     n_batch = (len(train_loader.dataset)//batch_size)+1
@@ -102,7 +107,7 @@ def train(args, train_loader, model):
     for epoch in range(args.start_epoch, args.epochs+1):
 
         start_time = time.time()
-        args.lr = adjust_learning_rate(args.lr, epoch, args.lr_decay_epochs)
+        args.lr = adjust_learning_rate(args.lr, epoch, args.lr_decay_rate, args.lr_decay_epochs)
 
         print("\n=> Training Epoch #%d, LR=%.4f" %(epoch, args.lr))
         loss, acc = train_one_epoch(args, train_loader, model, criterion, optimizer)
