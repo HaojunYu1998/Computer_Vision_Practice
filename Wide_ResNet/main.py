@@ -114,7 +114,7 @@ def train(args, train_loader, valid_loader, model):
         elapsed_time += (time.time() - start_time)
         print("| Elapsed time : %d:%02d:%02d"  %(get_hms(elapsed_time)))
         
-        if epoch % save_freq == 0:
+        if epoch % args.save_freq == 0:
             file_name = model_folder + "ckpt_epoch_{}.pth".format(epoch)
             save_file = os.path.join(model_folder, file_name)
             print("==> Saving model at {}...".format(save_file))
@@ -138,7 +138,7 @@ def train(args, train_loader, valid_loader, model):
         "opt": opt,
     }
     del state
-    np.save("./model/WRN_{}_{}/history.npy".format(args.depth, args.widen_factor), history)
+    np.save(model_folder + "history.npy".format(args.depth, args.widen_factor), history)
     torch.cuda.empty_cache()
 
 def _test(args, test_loader, model):
