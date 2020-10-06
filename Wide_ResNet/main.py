@@ -77,7 +77,7 @@ def train_one_epoch(args, train_loader, model, criterion, optimizer):
             param_group["lr"] = args.lr
         optimizer.step()
 
-        _, predicts = torch.argmax(outputs.data, dim=1)
+        _, predicted = torch.max(outputs.data, 1)
         acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
         acc_meter.update(acc, args.batch_size)
 
@@ -163,7 +163,7 @@ def test(args, test_loader, model):
 
         inputs, targets = Variable(inputs), Variable(targets)
         outputs = model(inputs)
-        _, predicts = torch.argmax(outputs.data, dim=1)
+        _, predicted = torch.max(outputs.data, 1)
 
         acc = accuracy_score(targets.data.cpu().long().squeeze(), predicts.cpu().long().squeeze())
         acc_meter.update(acc, args.batch_size)
@@ -179,21 +179,22 @@ def main(args):
 
     # Constructing Model
 
-    if args.resume:
+    if args.resume != "":
         if os.path.isfile(args.resume):
             print("=> Loading checkpoint '{}'".format(args.resume))
             checkpoint = torch.load(args.resume, map_location="cpu")
             test_only = args.test_only
+            resume = args.resume
             args = checkpoint["opt"]
             args.test_only = test_only
-            args.resume = True
+            args.resume = resume
         else:
             checkpoint = None
             print("=> No checkpoint found at '{}'".format(args.resume))
 
     model = WideResNet(args.depth, args.widen_factor, args.dropout_rate, args.num_classes)
 
-    if args.resume:
+    if args.resume != "":
         model.load_state_dict(checkpoint["model"])
         args.start_epoch = checkpoint["epoch"]
         print(
@@ -241,8 +242,7 @@ def main(args):
     # Test only
 
     if args.test_only:
-        if args.resume:
-            
+        if args.resume != "":
             test(args, test_loader, model)
             sys.exit(0)
         else:
