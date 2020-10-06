@@ -20,9 +20,6 @@ import torchvision
 import torchvision.transforms as transforms
 from torchvision.datasets import CIFAR10
 
-
-
-
 def parse_option():
 
     parser = argparse.ArgumentParser("argument for training")
@@ -95,11 +92,9 @@ def train_one_epoch(args, train_loader, model, epoch, history):
         sys.stdout.write("| Epoch [%d/%d] Iter[%d/%d]\t\tLoss: %.3f Acc: %.3f%%"
                 %(epoch, args.epochs, batch_idx+1, n_batch, loss.item(), acc_meter.avg))
         sys.stdout.flush()
-
-        torch.cuda.synchronize()
     
     history["acc"].append(acc_meter.avg)
-    history["loss"].append(loss_meter.avg)   
+    history["loss"].append(loss.item())   
     
 def train(args, train_loader, valid_loader, model):
 
