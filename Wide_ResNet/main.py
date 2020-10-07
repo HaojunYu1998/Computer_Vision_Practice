@@ -43,7 +43,8 @@ def parse_option():
     parser.add_argument("--start_epoch", default=1, type=int, help="start epoch")
     parser.add_argument("--test_only", action="store_true", default=False, help="test only")
     parser.add_argument("--save_freq", type=int, default=10, help="save frequency")
-
+    parser.add_argument("--gpu", type=int, nargs="+", default=0, help="gpu ids to use")
+    
     opt = parser.parse_args()
 
     iterations = opt.lr_decay_epochs.split(",")
@@ -99,6 +100,7 @@ def train_one_epoch(args, train_loader, model, epoch, history):
 def train(args, train_loader, valid_loader, model):
 
     model_folder = os.path.join("model/","WRN_{}_{}/".format(args.depth, args.widen_factor))
+    os.makedirs(model_folder, exist_ok=True)
     history = {"acc": [], "loss": []}
     elapsed_time = 0
 
@@ -115,26 +117,27 @@ def train(args, train_loader, valid_loader, model):
         print("| Elapsed time : %d:%02d:%02d"  %(get_hms(elapsed_time)))
         
         if epoch % args.save_freq == 0:
-            file_name = model_folder + "ckpt_epoch_{}.pth".format(epoch)
+            file_name = "ckpt_epoch_{}.pth".format(epoch)
             save_file = os.path.join(model_folder, file_name)
             print("==> Saving model at {}...".format(save_file))
             state = {
                 "model": model.state_dict(),
                 "epoch": epoch,
-                "opt": opt,
+                "opt": args,
             }
             torch.save(state, save_file)
             del state
 
     print("=> Finish training")
     print("==> Saving model at {}...".format(save_file))
-    file_name = model_folder + "current.pth"
+    file_name = "current.pth"
     save_file = os.path.join(model_folder, file_name)
     state = {
         "model": model.state_dict(),
         "epoch": epoch,
-        "opt": opt,
+        "opt": args,
     }
+    torch.save(state, save_file)
     del state
     np.save(model_folder + "history.npy".format(args.depth, args.widen_factor), history)
     torch.cuda.empty_cache()
@@ -181,7 +184,7 @@ def main(args):
     if args.resume != "":
         if os.path.isfile(args.resume):
             print("=> Loading checkpoint '{}'".format(args.resume))
-            checkpoint = torch.load(args.resume, map_location="cpu")
+            checkpoint = torch.load(args.resume, map_location='cpu')
             test_only = args.test_only
             resume = args.resume
             args = checkpoint["opt"]
@@ -193,9 +196,13 @@ def main(args):
 
     model = WideResNet(args.depth, args.widen_factor, args.dropout_rate, args.num_classes)
 
+    if torch.cuda.is_available():
+        model.cuda()
+        model = torch.nn.DataParallel(model, device_ids=args.gpu)
+
     if args.resume != "":
         model.load_state_dict(checkpoint["model"])
-        args.start_epoch = checkpoint["epoch"]
+        args.start_epoch = checkpoint["epoch"] + 1
         print(
             "=> Loaded successfully '{}' (epoch {})".format(
                 args.resume, checkpoint["epoch"]
@@ -205,10 +212,6 @@ def main(args):
         torch.cuda.empty_cache()
     else:
         model.apply(conv_init)
-
-    if torch.cuda.is_available():
-        model.cuda()
-        model = torch.nn.DataParallel(model, device_ids=range(torch.cuda.device_count()))
 
     # Loading Dataset    
 
