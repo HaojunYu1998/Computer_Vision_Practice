@@ -11,5 +11,5 @@ git clone https://github.com/HaojunYuPKU/Computer_Vision_Practice
 , and run in folder Wide_ResNet
 
 ``
-python main.py --depth 28 --widen_factor 10 --gpu [gpus]
+python main.py --depth [depth] --widen_factor [widen_factor] --gpu [gpus]
 ``
