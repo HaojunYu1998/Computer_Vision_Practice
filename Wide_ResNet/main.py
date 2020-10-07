@@ -171,7 +171,7 @@ def test(args, test_loader, model):
 
 def valid_one_epoch(args, test_loader, model, epoch):
     loss, acc_meter = _test(args, test_loader, model)
-    print("\n| Validation Epoch #%d\t\t\tLoss: %.4f Acc@1: %.2f%%" %(epoch, loss.item(), acc_meter.avg))
+    print("\n| Validation Epoch #%d\t\t\tLoss: %.4f Acc: %.2f%%" %(epoch, loss.item(), acc_meter.avg))
 
 def main(args):
     np.random.seed(0)
