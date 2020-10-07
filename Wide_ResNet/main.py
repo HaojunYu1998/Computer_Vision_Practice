@@ -213,13 +213,6 @@ def main(args):
     else:
         model.apply(conv_init)
 
-<<<<<<< HEAD
-=======
-    if torch.cuda.is_available():
-        model.cuda()
-        model = torch.nn.DataParallel(model, device_ids=args.gpu)
-
->>>>>>> ead82a854244cc5f52418fb377fb1f8bce455334
     # Loading Dataset    
 
     if args.augment == "meanstd":
