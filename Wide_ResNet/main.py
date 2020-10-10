@@ -45,14 +45,16 @@ def parse_option():
     parser.add_argument("--save_freq", type=int, default=10, help="save frequency")
     parser.add_argument("--gpu", type=int, nargs="+", default=0, help="gpu ids to use")
     
-    opt = parser.parse_args()
+    args = parser.parse_args()
 
-    iterations = opt.lr_decay_epochs.split(",")
-    opt.lr_decay_epochs = list([])
+    iterations = args.lr_decay_epochs.split(",")
+    args.lr_decay_epochs = list([])
     for it in iterations:
-        opt.lr_decay_epochs.append(int(it))
-
-    return opt
+        args.lr_decay_epochs.append(int(it))
+    
+    if isinstance(args.gpu, int):
+        args.gpu = [args.gpu]
+    return args
 
 def train_one_epoch(args, train_loader, model, epoch, history):
     
