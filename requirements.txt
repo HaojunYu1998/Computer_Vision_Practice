@@ -24,6 +24,7 @@ mock==4.0.2
 numpy @ file:///tmp/build/80754af9/numpy_and_numpy_base_1596233707986/work
 oauthlib==3.1.0
 olefile==0.46
+opencv-python==4.4.0.44
 Pillow @ file:///tmp/build/80754af9/pillow_1594307325547/work
 portalocker==2.0.0
 protobuf==3.13.0
