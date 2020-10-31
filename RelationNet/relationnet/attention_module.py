@@ -217,4 +217,3 @@ class AttentionNMSModule(nn.Module):
 		).view(batch_images, dim[2], num_boxes, num_classes).permute(0, 2, 3, 1)
 		return output, aff_softmax.view(batch_images, num_classes * fc_dim, num_boxes, num_boxes)
 
-

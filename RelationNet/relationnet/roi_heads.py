@@ -12,6 +12,7 @@ from detectron2.modeling.box_regression import Box2BoxTransform
 from detectron2.modeling.roi_heads.roi_heads import Res5ROIHeads
 from detectron2.modeling.roi_heads.fast_rcnn import FastRCNNOutputLayers
 from detectron2.modeling.proposal_generator.proposal_utils import add_ground_truth_to_proposals
+from detectron2.modeling.matcher import Matcher
 from detectron2.structures import Instances
 from detectron2.structures import Boxes, ImageList, Instances, pairwise_iou
 
@@ -26,71 +27,6 @@ from .embedding import (
 from .padding import padding_tensor
 
 __all__ = ["RelationROIHeads"]
-
-@ROI_HEADS_REGISTRY.register()
-class Res5ROIHeads_v2(Res5ROIHeads):
-	def forward(self, images, features, proposals, targets=None):
-		"""
-		Args:
-			images (ImageList):
-			features (dict[str,Tensor]): input data as a mapping from feature
-				map name to tensor. Axis 0 represents the number of images `N` in
-				the input data; axes 1-3 are channels, height, and width, which may
-				vary between feature maps (e.g., if a feature pyramid is used).
-			proposals (list[Instances]): length `N` list of `Instances`. The i-th
-				`Instances` contains object proposals for the i-th input image,
-				with fields "proposal_boxes" and "objectness_logits".
-			targets (list[Instances], optional): length `N` list of `Instances`. The i-th
-				`Instances` contains the ground-truth per-instance annotations
-				for the i-th input image.  Specify `targets` during training only.
-				It may have the following fields:
-
-				- gt_boxes: the bounding box of each instance.
-				- gt_classes: the label for each instance with a category ranging in [0, #class].
-				- gt_masks: PolygonMasks or BitMasks, the ground-truth masks of each instance.
-				- gt_keypoints: NxKx3, the groud-truth keypoints for each instance.
-
-		Returns:
-			list[Instances]: lt
-			dict[str->Tensor]:
-			mapping from a named loss to a tensor storing the loss. Used during training only.
-		"""
-		del images
-
-		if self.training:
-			assert targets
-			print(targets[0].gt_boxes.tensor.shape)
-			proposals = self.label_and_sample_proposals(proposals, targets)
-		del targets
-
-		proposal_boxes = [x.proposal_boxes for x in proposals]
-		# box_features is a torch.Tensor with shape (M, C, outshap0, outshape1)
-		# where M is the total number of boxes aggregated over all N batch images.
-		box_features = self._shared_roi_transform(
-			[features[f] for f in self.in_features], proposal_boxes
-		)
-		predictions = self.box_predictor(box_features.mean(dim=[2, 3]))
-
-		if self.training:
-			del features
-			losses = self.box_predictor.losses(predictions, proposals)
-			if self.mask_on:
-				proposals, fg_selection_masks = select_foreground_proposals(
-					proposals, self.num_classes
-				)
-				# Since the ROI feature transform is shared between boxes and masks,
-				# we don't need to recompute features. The mask loss is only defined
-				# on foreground proposals, so we need to select out the foreground
-				# features.
-				mask_features = box_features[torch.cat(fg_selection_masks, dim=0)]
-				del box_features
-				losses.update(self.mask_head(mask_features, proposals))
-			return [], losses
-		else:
-			pred_instances, _ = self.box_predictor.inference(predictions, proposals)
-			pred_instances = self.forward_with_given_boxes(features, pred_instances)
-			return pred_instances, {}
-
 
 @ROI_HEADS_REGISTRY.register()
 class RelationROIHeads(Res5ROIHeads):
@@ -117,7 +53,7 @@ class RelationROIHeads(Res5ROIHeads):
 		self.device = device = torch.device(cfg.MODEL.DEVICE)
 		self.learn_nms_train = cfg.MODEL.RELATIONNET.LEARN_NMS_TRAIN
 		self.learn_nms_test = cfg.MODEL.RELATIONNET.LEARN_NMS_TEST
-		self.nms_thresh = cfg.MODEL.RELATIONNET.NMS_THRESH
+		self.nms_thresh = cfg.MODEL.ROI_HEADS.IOU_THRESHOLDS
 		self.num_thresh = len(self.nms_thresh)
 		self.first_n = cfg.MODEL.RELATIONNET.FIRST_N_TRAIN if self.training else cfg.MODEL.RELATIONNET.FIRST_N_TEST
 		self.bbox_means = cfg.BBOX_MEANS if self.training else None
@@ -172,13 +108,73 @@ class RelationROIHeads(Res5ROIHeads):
 		)
 		return attention_module_nms_multi_head
 	
-	def learn_nms(self, predictions, proposal_boxes):
+	def match_label(self, proposals, targets):
+		"""
+		Args:
+			proposals (list[Instances]):
+				Each Instances contains bboxes/masks/keypoints of a image. We focus on
+					- proposal_boxes: proposed bboxes in format `Boxes`
+					- objectness_logits: list[np.ndarray] each is an N sized array of 
+					  objectness scores corresponding to the boxes
+
+			targets (list[Instances], optional): length `N` list of `Instances`. The i-th
+				`Instances` contains the ground-truth per-instance annotations
+				for the i-th input image.  Specify `targets` during training only.
+				It may have the following fields:
+				- gt_boxes: the bounding box of each instance.
+				- gt_classes: the label for each instance with a category ranging in [0, num_classes)
+		Return:
+
+		"""	
+		gt_boxes = [x.gt_boxes for x in targets]
+		if self.proposal_append_gt:
+			proposals = add_ground_truth_to_proposals(gt_boxes, proposals)
+
+		proposals_with_gt = []
+
+		num_fg_samples = []
+		num_bg_samples = []
+		for proposals_per_image, targets_per_image in zip(proposals, targets):
+			has_gt = len(targets_per_image) > 0
+			match_quality_matrix = pairwise_iou(
+				targets_per_image.gt_boxes, proposals_per_image.proposal_boxes
+			)
+			matched_idxs, matched_labels = self.proposal_matcher(match_quality_matrix)
+			# Get the corresponding GT for each proposal
+			if has_gt:
+				gt_classes = targets_per_image.gt_classes[matched_idxs]
+				# Label unmatched proposals (0 label from matcher) as background (label=num_classes)
+				gt_classes[matched_labels == 0] = self.num_classes
+				# Label ignore proposals (-1 label)
+				gt_classes[matched_labels == -1] = -1
+			else:
+				# 如果没有ground truth classes就全部设置成“背景”
+				gt_classes = torch.zeros_like(matched_idxs) + self.num_classes
+			proposals_per_image.gt_classes = gt_classes
+			if has_gt:
+				for (trg_name, trg_value) in targets_per_image.get_fields().items():
+					if trg_name.startswith("gt_") and not proposals_per_image.has(trg_name):
+						proposals_per_image.set(trg_name, trg_value[matched_idxs])
+			else:
+				gt_boxes = Boxes(
+					targets_per_image.gt_boxes.tensor.new_zeros((len(matched_idxs), 4))
+				)
+				proposals_per_image.gt_boxes = gt_boxes
+
+			num_bg_samples.append((gt_classes == self.num_classes).sum().item())
+			num_fg_samples.append(gt_classes.numel() - num_bg_samples[-1])
+			proposals_with_gt.append(proposals_per_image)
+		return proposals_with_gt
+
+	def learn_nms(self, predictions, proposal_boxes, gt_classes):
 		"""
 		Args:
 			predictions (Tuple(Tensor)): (cls_score, bbox_pred)
-			  - cls_score (Tensor): (all_valid_boxes, num_classes + 1)
-			  - bbox_pred (Tensor): (all_valid_boxes, num_reg_classes * 4)
+			  - scores (Tensor): (all_valid_boxes, num_classes + 1)
+			  - proposal_deltas (Tensor): (all_valid_boxes, num_reg_classes * 4)
 			proposal_boxes (List(Boxes)): proposed boxes
+			gt_classes (List(Tensor)): each is (num_boxes,) Tensor with value 
+				in [0, num_classes)
 		Return:
 			nms_multi_score (Tensor): s_0*s_1 in the paper
 			sorted_bbox
@@ -187,30 +183,47 @@ class RelationROIHeads(Res5ROIHeads):
 
 		# TODO: remove groud truth after added in query
 		scores, proposal_deltas = predictions
+		all_valid_boxes = proposal_deltas.shape[0]
+		num_classes = scores.shape[1] - 1
+		assert self.num_reg_classes == proposal_deltas.shape[1] // 4
+		batch_images = len(self.boxes_per_image)
 		proposal_deltas.require_grad = False
 		proposal_boxes = proposal_boxes[0].cat(proposal_boxes).tensor
 		# (all_valid_boxes, 4, num_reg_classes)
 		refined_bbox = self.box2box_transform.apply_deltas(
 			proposal_deltas, proposal_boxes
-		)
+		).view(all_valid_boxes, 4, self.num_reg_classes)
 		# (batch_images, num_boxes, num_classes)
-		scores_pad = padding_tensor(scores, self.nongt_per_image, padding_max_len)
-		# (batch_images, first_n, num_classes)
+		scores_pad = padding_tensor(scores, self.boxes_per_image, self.num_boxes)
+		# (batch_images, num_boxes, num_classes)
 		sorted_score, rank_indices = F.softmax(
-			scores_pad[...,1:], dim=1
-		).sort(dim=1, descending=True)[:,:self.first_n,:]
-		# (bath_images, num_boxes, 4, num_reg_classes)
-		refined_bbox_pad = padding_tensor(refined_bbox, self.nongt_per_image, padding_max_len)
+			scores_pad[...,1:], dim = 1
+		).sort(dim=1, descending=True)
+		# (batch_images, first_n, num_classes)
+		sorted_score, rank_indices = sorted_score[:,:self.first_n,:], rank_indices[:,:self.first_n,:]
+		# (batch_images, first_n, num_classes)
+		rank_indices = rank_indices.add(
+			torch.arange(batch_images)[:,None,None].cuda() * self.num_boxes
+		).view(-1).to(torch.int64)
+		# (batch_images, num_boxes, 4, num_reg_classes)
+		refined_bbox_pad = padding_tensor(refined_bbox, self.boxes_per_image, self.num_boxes)
+		# (batch_images * num_boxes, 4, num_reg_classes)
+		refined_bbox_pad = refined_bbox_pad.view(-1, 4, self.num_reg_classes)
 		# (batch_images, first_n, num_classes, 4, num_reg_classes)
-		sorted_bbox = refined_bbox_pad.take(rank_indices)
+		sorted_bbox = refined_bbox_pad[rank_indices].view(
+			batch_images, self.first_n, num_classes, 4, self.num_reg_classes
+		)
+		# (batch_images, first_n, num_classes, 4) or original shape
 		sorted_bbox = sorted_bbox.squeeze() # num_reg_classes may be 1
 		if len(sorted_bbox.shape) == 5:
+			# (num_classes, num_reg_classes, batch_images, first_n, 4)
+			# => (batch_images, first_n, 4, nuum_classes)
+			sorted_bbox = sorted_bbox.permute(2,4,0,1,3).diagonal(0)
 			# (batch_images, first_n, num_classes, 4)
-			cls_mask = torch.arange(0, num_classes).view(1,1,-1,1).repeat(batch_images, self.first_n, 1, 4)
-			# (batch_images, first_n, num_classes, 4)
-			sorted_bbox = sorted_bbox.gather(4, cls_mask)
+			sorted_bbox = sorted_bbox.transpose(2, 3)
+			print("sorted_bbox:", sorted_bbox.shape)
 		# (frist_n, 1024)
-		nms_rank_embedding = extract_rank_embedding(first_n, 1024)
+		nms_rank_embedding = extract_rank_embedding(self.first_n, 1024)
 		# (frist_n, 128)
 		nms_rank_feat = self.rank_emb_fc(nms_rank_embedding)
 		# (batch_images, num_classes, first_n, first_n, 4)
@@ -233,15 +246,15 @@ class RelationROIHeads(Res5ROIHeads):
 		# => (batch_images, first_n * num_classes, dim[2])
 		nms_all_feat = F.relu(
 			nms_embedding_feat + nms_attention
-		).view(batch_images, first_n * num_classes, dim[2])
-		# (batch_images, first_n * num_classes, 1)
-		# => (batch_images, first_n, num_classes, 1)
+		).view(batch_images, self.first_n * num_classes, dim[2])
+		# (batch_images, first_n * num_classes, num_thresh)
+		# => (batch_images, first_n, num_classes, num_thresh)
 		nms_conditional_logit = self.nms_logit_fc(
 			nms_all_feat
-		).view(batch_images, first_n, num_classes, 1)
-		# (batch_images, first_n, num_classes, 1)
+		).view(batch_images, self.first_n, num_classes, self.num_thresh)
+		# (batch_images, first_n, num_classes, num_thresh)
 		nms_conditional_score = F.sigmoid(nms_conditional_logit)
-		# (batch_images, first_n, num_classes, 1)
+		# (batch_images, first_n, num_classes, num_thresh)
 		nms_multi_score = nms_conditional_score + sorted_score[...,None]
 		return nms_multi_score, sorted_bbox, sorted_score
 
@@ -273,20 +286,22 @@ class RelationROIHeads(Res5ROIHeads):
 			loss (dict[str->Tensor]):
 			mapping from a named loss to a tensor storing the loss. Used during training only.
 		"""
+		# TODO: index the nms_multi_target to get the corresponding "first_n"
+		# complete the binary cross_entropy loss
 		del images
+		if self.training:
+			assert targets
+			proposals = self.match_label(proposals, targets)
+		del targets
 		# proposal_boxes: List[Boxes]
 		proposal_boxes = [x.proposal_boxes for x in proposals]
-		self.nongt_per_image = [x.proposal_boxes.tensor.shape[0] for x in proposals]
+		self.boxes_per_image = [x.proposal_boxes.tensor.shape[0] for x in proposals]
 		# num_boxes is the max number of proposal boxes in this batch
-		self.nongt_dim = self.batch_size_per_image = np.max(self.nongt_per_image)
-		if self.training and self.proposal_append_gt:
-			assert targets
-			proposals = self.label_and_sample_proposals(proposals, targets)
-			print(proposals[0].proposal_boxes.tensor.shape, proposals[1].proposal_boxes.tensor.shape)
-		del targets
+		self.num_boxes = np.max(self.boxes_per_image)
+		# List(Tensor): (num_boxes)
 		proposal_boxes_pad = [
 			Boxes(F.pad(
-				x.tensor, (0, 0, 0, self.nongt_dim- x.tensor.shape[0])
+				x.tensor, (0, 0, 0, self.num_boxes- x.tensor.shape[0])
 			)) for x in proposal_boxes
 		]
 		# mask[num_boxes * i + j] == True means the j-th box in i-th image is valid
@@ -301,7 +316,7 @@ class RelationROIHeads(Res5ROIHeads):
 		for boxes in proposal_boxes:
 			n = boxes.tensor.shape[0]
 			box_features_list.append(
-				F.pad(box_features[idx:idx+n,:], (0,0,0,self.num_boxes-n))
+				F.pad(box_features[idx:idx+n,:], (0,0,0,self.num_boxes- n))
 			)
 		# (batch_images, num_boxes, channels * outshape1 * outshape2)
 		box_features_pad = torch.cat(box_features_list).view(batch_images, self.num_boxes, -1)
@@ -344,9 +359,7 @@ class RelationROIHeads(Res5ROIHeads):
 
 		# do not learn nms
 		if self.training and (not self.learn_nms_train):
-			del features
-			losses = self.box_predictor.losses(predictions, proposals)
-			return [], losses
+			raise NoImplementationError("training should set learn_nms == True!")
 		elif (not self.training) and (not self.learn_nms_test):
 			pred_instances, _ = self.box_predictor.inference(predictions, proposals)
 			pred_instances = self.forward_with_given_boxes(features, pred_instances)
@@ -363,19 +376,15 @@ class RelationROIHeads(Res5ROIHeads):
 		# 3. The transformed features of each object pass a linear classifier and sigmoid to output 
 		#	 the probabilit y ∈ [0, 1].
 		nms_eps = 1e-8
-		# nms_multi_score: (batch_images, first_n, num_classes, 1)
+		# nms_multi_score: (batch_images, first_n, num_classes, num_thresh)
 		# sorted_boxes: (batch_images, first_n, num_classes, 4)
 		# sorted_score: (batch_images, first_n, num_classes)
-		nms_multi_score, sorted_bbox, sorted_score = self.learn_nms(predictions, proposal_boxes)
+		nms_gt_classes = torch.cat([x.gt_classes for x in proposals])
+		nms_gt_classes_pad = padding_tensor(nms_gt_classes, self.boxes_per_image, self.num_boxes, value=-1)
+		nms_multi_score, sorted_bbox, sorted_score = self.learn_nms(predictions, proposal_boxes, nms_gt_classes_pad)
+		print(nms_multi_score.shape)
 		nms_pos_loss = - torch.mul(nms_multi_target, torch.log(nms_multi_score + nms_eps))
 		nms_neg_loss = - torch.mul((1.0 - nms_multi_target), torch.log(1.0 - nms_multi_score + nms_eps))
-		normalizer = first_n 
-		nms_pos_loss = cfg.TRAIN.nms_loss_scale * nms_pos_loss / normalizer
-		nms_neg_loss = cfg.TRAIN.nms_loss_scale * nms_neg_loss / normalizer
+		normalizer = first_n * self.num_thresh
 		
-
-
-
-
-
 
