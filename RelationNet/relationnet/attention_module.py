@@ -160,16 +160,22 @@ class AttentionNMSModule(nn.Module):
 		"""
 		batch_images, num_classes, num_boxes = position_embedding.shape[:3]
 		# (batch_images, num_classes * num_boxes, feat_dim)
-		roi_feat = roi_feat.transpose(1, 2).view(batch_images, -1, self.feat_dim)
+		roi_feat = roi_feat.transpose(1, 2).contiguous().view(batch_images, -1, self.feat_dim)
+		# roi_feat: torch.Size([4, 2000, 128]) 128
+		print("roi_feat:",roi_feat.shape, self.feat_dim)
 		# (batch_images, num_classes * num_boxes * num_boxes, emb_dim)
 		position_embedding = position_embedding.view(batch_images, num_classes * num_boxes **2, self.emb_dim)
+		# pos_emb: torch.Size([4, 200000, 64]) 64
+		print("pos_emb:",position_embedding.shape, self.emb_dim)
 		# (batch_images, num_classes * num_boxes * num_boxes, fc_dim)
 		# => (batch_images, num_classes, num_boxes, num_boxes, fc_dim)
 		# => (batch_images, num_classes, fc_dim, num_boxes, num_boxes)
 		# => (batch_images, num_classes * fc_dim, num_boxes, num_boxes)
 		aff_weight	= F.relu(self.pos_fc(position_embedding)).view(
 			batch_images, num_classes, num_boxes, num_boxes, self.fc_dim
-		).permute(0, 1, 4, 2, 3).view(batch_images, -1, num_boxes, num_boxes)
+		).permute(0, 1, 4, 2, 3).contiguous().view(batch_images, -1, num_boxes, num_boxes)
+		# ff_weight: torch.Size([4, 320, 100, 100]) 16
+		print("aff_weight:", aff_weight.shape, self.fc_dim)
 		#################################### multi head ####################################
 		assert self.dim[0] == self.dim[1], 'Matrix multi requires the same dims!'
 		# (batch_images, num_classes * num_boxes, dim[0])
@@ -177,24 +183,34 @@ class AttentionNMSModule(nn.Module):
 		# => (batch_images, groups * num_classes, num_boxes, dim[0]/groups)
 		q_data = self.query_fc(roi_feat).view(
 			batch_images, num_classes, num_boxes, self.groups, self.dim_groups[0]
-		).permute(0, 1, 3, 2, 4).view(batch_images, -1, self.groups, self.dim_groups[0])
+		).transpose(2, 3)
+		q_data_batch = q_data.contiguous().view(
+			batch_images, -1, num_boxes, self.dim_groups[0]
+		)
 		# (batch_images, num_classes * num_boxes, dim[1])
 		# => (batch_images, num_classes, num_boxes, groups, dim[1]/groups) 
-		# => (batch_images, groups * num_classes, num_boxes, dim[1]/groups)
+		# => (batch_images, num_classes, group, snum_boxes, dim[1]/groups) 
 		k_data = self.key_fc(roi_feat).view(
 			batch_images, num_classes, num_boxes, self.groups, self.dim_groups[1]
-		).permute(0, 1, 3, 2, 4).view(batch_images, -1, self.groups, self.dim_groups[1])
+		).transpose(2, 3)
+		# => (batch_images, groups * num_classes, num_boxes, dim[1]/groups)
+		k_data_batch = k_data.contiguous().view(
+			batch_images, -1, num_boxes, self.dim_groups[1]
+		)
+		print("q_data_batch:", q_data_batch.shape)
 		# (batch_images, num_classes * num_boxes, feat_dim)
-		v_data = roi_feat.view(batch_images, num_classes, num_boxes, feat_dim)
+		v_data = roi_feat.view(batch_images, num_classes, num_boxes, self.feat_dim)
 		# (batch_images, groups * num_classes, num_boxes, dim[0]/groups) 
 		# * (batch_images, groups * num_classes, dim[1]/groups, nongt_dim)
 		# => (batch_images, groups * num_classes, num_boxes, num_boxes)
-		aff = torch.matmul(q_data, k_data.transpose(2, 3))
+		aff = torch.matmul(q_data_batch, k_data_batch.transpose(2, 3))
 		# (batch_images, group * num_classes, num_boxes, num_boxes)
 		aff_scaled = 1.0 / np.sqrt(self.dim_groups[1]) * aff
 		assert self.fc_dim == self.groups, "Check the dimensions in attention!"
 		# (batch_images, num_classes * fc_dim, num_boxes, num_boxes)
-		weighted_aff = torch.log(torch.max(aff_weight, torch.Tensor([[[1e-6]]]).cuda())) + aff_scaled
+		weighted_aff = torch.log(
+			torch.max(aff_weight, torch.full(aff_weight.shape, 1e-6).cuda())
+		) + aff_scaled
 		# (batch_images, num_classes * fc_dim, num_boxes, num_boxes)
 		# => (batch_images, num_classes, fc_dim * num_boxes, num_boxes)
 		aff_softmax = F.softmax(
@@ -205,15 +221,21 @@ class AttentionNMSModule(nn.Module):
 		# => (batch_images, num_classes, num_boxes * fc_dim, feat_dim)
 		output_t = torch.matmul(aff_softmax, v_data)
 		# (batch_images, num_classes, fc_dim, num_boxes, feat_dim)
-		output_t = output_t.view(batch_images, num_classes, self.fc_dim, num_boxes)
+		output_t = output_t.view(
+			batch_images, num_classes, self.fc_dim, num_boxes, self.feat_dim
+		)
 		# (batch_images, fc_dim, feat_dim, num_boxes, num_classes) 
 		# => (batch_images, fc_dim * feat_dim, num_boxes, num_classes)
-		output_t = output_t.permute(0, 2, 4, 3, 1).view(batch_images, -1, num_boxes, self.num_classes)
+		output_t = output_t.permute(0, 2, 4, 3, 1).contiguous().view(
+			batch_images, -1, num_boxes, num_classes
+		)
 		# (batch_images, fc_dim * feat_dim, num_boxes, num_classes)
 		# => (batch_images, dim[2], num_boxes, num_classes)
 		# => (batch_images, num_boxes, num_classes, dim[2])
 		output = self.conv1x1_out(
 			output_t
-		).view(batch_images, dim[2], num_boxes, num_classes).permute(0, 2, 3, 1)
-		return output, aff_softmax.view(batch_images, num_classes * fc_dim, num_boxes, num_boxes)
+		).view(batch_images, self.dim[2], num_boxes, num_classes).permute(0, 2, 3, 1)
+		return output, aff_softmax.view(
+			batch_images, num_classes * self.fc_dim, num_boxes, num_boxes
+		)
 

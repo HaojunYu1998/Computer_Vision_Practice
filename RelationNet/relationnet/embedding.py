@@ -92,7 +92,7 @@ def extract_pairwise_multi_position_embedding(position_mat, emb_dim, wave_length
 	"""
 	# TODO: support batch
 	batch_images, num_classes, num_boxes = position_mat.shape[:3]
-	assert position_mat.shape[1] == position_mat.shape[2]
+	assert position_mat.shape[2] == position_mat.shape[3]
 	# (emb_dim/8,)
 	feat_range = torch.arange(emb_dim // 8).cuda()
 	# (1, 1, 1, 1, 1, emb_dim / 8)

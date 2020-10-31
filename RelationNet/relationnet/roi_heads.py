@@ -78,7 +78,7 @@ class RelationROIHeads(Res5ROIHeads):
 		self.fc = [nn.Linear(self.feat_dim, self.feat_dim).to(device) for i in range(2)]
 		self.rank_emb_fc = nn.Linear(self.feat_dim, self.nms_fc_dim).to(device)
 		self.roi_emb_fc = nn.Linear(self.feat_dim, self.nms_fc_dim)
-		self.nms_logit_fc = nn.Linear(self.att_dim[2], self.num_thresh)
+		self.nms_logit_fc = nn.Linear(self.nms_fc_dim, self.num_thresh)
 		################################ intialization ###################################
 		mean, std = 0.0, 0.01
 		nn.init.normal_(self.fc_feat.weight, mean, std)
@@ -166,7 +166,7 @@ class RelationROIHeads(Res5ROIHeads):
 			proposals_with_gt.append(proposals_per_image)
 		return proposals_with_gt
 
-	def learn_nms(self, predictions, proposal_boxes, gt_classes):
+	def learn_nms(self, roi_feat, predictions, proposal_boxes, gt_classes):
 		"""
 		Args:
 			predictions (Tuple(Tensor)): (cls_score, bbox_pred)
@@ -221,7 +221,6 @@ class RelationROIHeads(Res5ROIHeads):
 			sorted_bbox = sorted_bbox.permute(2,4,0,1,3).diagonal(0)
 			# (batch_images, first_n, num_classes, 4)
 			sorted_bbox = sorted_bbox.transpose(2, 3)
-			print("sorted_bbox:", sorted_bbox.shape)
 		# (frist_n, 1024)
 		nms_rank_embedding = extract_rank_embedding(self.first_n, 1024)
 		# (frist_n, 128)
@@ -232,21 +231,27 @@ class RelationROIHeads(Res5ROIHeads):
 		nms_position_embedding = extract_pairwise_multi_position_embedding(
 			nms_position_matrix,  self.pos_emb_dim
 		)
-		# (batch_images, first_n, num_classes, 128)
-		roi_feat_emb = self.roi_emb_fc(fc_out).take(indices=rank_indices)
+		# (all_valid_boxes, feat_dim) => (all_valid_boxes, nms_fc_dim)
+		roi_feat_emb = self.roi_emb_fc(roi_feat)
+		# (batch_images, num_boxes, nms_fc_dim)
+		roi_feat_pad = padding_tensor(roi_feat_emb, self.boxes_per_image, self.num_boxes)
+		# (batch_images * first_n * num_classes, nms_fc_dim)
+		roi_feat = roi_feat_pad.view(-1, self.nms_fc_dim)[rank_indices]
+		# (batch_images, first_n, num_classes, nms_fc_dim)
+		roi_feat = roi_feat.view(batch_images, self.first_n, num_classes, self.nms_fc_dim)
 		#################### vectorized nms ####################
-		# (batch_images, first_n, num_classes, 128)
-		nms_embedding_feat = nms_rank_feat[None,:,None,:] + roi_feat_emb
+		# (batch_images, first_n, num_classes, nms_fc_dim)
+		nms_embedding_feat = nms_rank_feat[None,:,None,:] + roi_feat
 		# nms_attention: (batch_images, first_n, num_classes, dim[2])
 		# nms_softmax: (batch_images, num_classes * fc_dim, first_n, first_n)
 		nms_attention, nms_softmax = self.attention_module_nms_multi_head(
 			nms_embedding_feat, nms_position_embedding
 		)
-		# (batch_images, first_n, num_classes, dim[2])
-		# => (batch_images, first_n * num_classes, dim[2])
+		# (batch_images, first_n, num_classes, nms_fc_dim) 
+		# => (batch_images, first_n * num_classes, nms_fc_dim)
 		nms_all_feat = F.relu(
 			nms_embedding_feat + nms_attention
-		).view(batch_images, self.first_n * num_classes, dim[2])
+		).view(batch_images, self.first_n * num_classes, self.nms_fc_dim)
 		# (batch_images, first_n * num_classes, num_thresh)
 		# => (batch_images, first_n, num_classes, num_thresh)
 		nms_conditional_logit = self.nms_logit_fc(
@@ -381,7 +386,9 @@ class RelationROIHeads(Res5ROIHeads):
 		# sorted_score: (batch_images, first_n, num_classes)
 		nms_gt_classes = torch.cat([x.gt_classes for x in proposals])
 		nms_gt_classes_pad = padding_tensor(nms_gt_classes, self.boxes_per_image, self.num_boxes, value=-1)
-		nms_multi_score, sorted_bbox, sorted_score = self.learn_nms(predictions, proposal_boxes, nms_gt_classes_pad)
+		nms_multi_score, sorted_bbox, sorted_score = self.learn_nms(
+			fc_out, predictions, proposal_boxes, nms_gt_classes_pad
+		)
 		print(nms_multi_score.shape)
 		nms_pos_loss = - torch.mul(nms_multi_target, torch.log(nms_multi_score + nms_eps))
 		nms_neg_loss = - torch.mul((1.0 - nms_multi_target), torch.log(1.0 - nms_multi_score + nms_eps))
