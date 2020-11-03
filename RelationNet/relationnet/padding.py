@@ -2,6 +2,7 @@ import torch
 import torch.nn.functional as F
 def padding_tensor(tensor, lens, max_len, mode='constant', value=0):
     """
+    (all_valid_boxes, ...)
     Slice tensor by lengths in the first dim, and padding them to
     max_len. Then concat them as shape (batch, max_len, ...).
     """
