@@ -12,7 +12,6 @@ from detectron2.modeling.proposal_generator.proposal_utils import add_ground_tru
 
 from .attention_module import AttentionModule
 from .embedding import extract_position_embedding, extract_position_matrix
-from .padding import padding_tensor
 from .learn_nms import LearnNMSModule
 
 __all__ = ["RelationROIHeads"]
@@ -50,26 +49,17 @@ class RelationROIHeads(Res5ROIHeads):
             self.first_n = cfg.MODEL.RELATIONNET.FIRST_N_TRAIN
         ############################### modules ####################################
         self.res5, self.res5_out_channels = self._build_res5_block(cfg)
-        # self.res5_out_size = self.res5_out_channels * self.pooler_resolution **2 // 4
-        # self.box_predictor = FastRCNNOutputLayers(
-        #     cfg, ShapeSpec(channels=self.feat_dim, height=1, width=1)
-        # )
         self.box_predictor = FastRCNNOutputLayers(
             cfg, ShapeSpec(channels=self.res5_out_channels, height=1, width=1)
         )
-        
-        # self.attention_module_multi_head = {
-        #     0: [self._build_attention_module_multi_head() for i in range(self.num_relation)],
-        #     1: [self._build_attention_module_multi_head() for i in range(self.num_relation)]
-        # }
         self.fc_feat = nn.Linear(self.res5_out_channels, self.feat_dim).to(self.device)
         self.fc = [nn.Linear(self.feat_dim, self.feat_dim).to(self.device) for i in range(2)]
         self.nms_module = LearnNMSModule(cfg)
         ########################## freeze parameters ###############################
-        for block in self.res5:
-            block.freeze()
-        for p in self.box_predictor.parameters():
-            p.requires_grad = False
+        # for block in self.res5:
+        #     block.freeze()
+        # for p in self.box_predictor.parameters():
+        #     p.requires_grad = False
         ############################# intialization ################################
         mean, std = 0.0, 0.01
         nn.init.normal_(self.fc_feat.weight, mean, std)
@@ -160,17 +150,6 @@ class RelationROIHeads(Res5ROIHeads):
             proposals = self.label_proposals(proposals, targets)
         # proposal_boxes: List[Boxes]
         proposal_boxes = [x.proposal_boxes for x in proposals]
-        for x in proposals:
-            assert len(x.proposal_boxes) == self.num_boxes
-        # self.boxes_per_image = [x.proposal_boxes.tensor.shape[0] for x in proposals]
-        # num_boxes is the max number of proposal boxes in this batch
-        # self.num_boxes = np.max(self.boxes_per_image)
-        # List(Tensor): (num_boxes)
-        # proposal_boxes_pad = [Boxes(F.pad(
-        #     x.tensor, (0, 0, 0, self.num_boxes - x.tensor.shape[0])
-        # )) for x in proposal_boxes]
-        # mask[num_boxes * i + j] == True means the j-th box in i-th image is valid
-        # mask = (torch.cat([boxes.tensor for boxes in proposal_boxes_pad]).mean(dim=1) != 0)
         # (all_valid_boxes, channels, outshape1, outshape2)
         box_features = self._shared_roi_transform(
             [features[f] for f in self.in_features], proposal_boxes
@@ -188,32 +167,8 @@ class RelationROIHeads(Res5ROIHeads):
         #     bbox_pred:
         # TODO: add ground truth boxes in query
         
-        # # (batch_images, num_boxes, channels * outshape1 * outshape2)
-        # box_features_pad = padding_tensor(box_features, self.boxes_per_image, self.num_boxes)
-        # # (batch_images, num_boxes, feat_dim)
-        # fc_out = self.fc_feat(box_features_pad)
-        # (all_valid_boxes, fc_feat)
         fc_out = self.fc_feat(box_features.mean(dim=[2, 3]))
-        # # (batch_images, num_boxes, 4)
-        # position_matrix = extract_position_matrix(proposal_boxes_pad, self.device)
-        # assert position_matrix.shape[1] % self.num_boxes == 0
-        # # (batch_images, num_boxes, num_boxes, emb_dim)
-        # position_embedding = extract_position_embedding(position_matrix, self.pos_emb_dim, self.device)
-        # # 2fc layers
-        # for fc_idx in range(2):
-        #     # (batch_images, num_boxes, feat_dim)
-        #     fc_out = self.fc[fc_idx](fc_out)
-        #     # (batch_images, num_boxes, feat_dim)
-        #     attention_out = torch.zeros(fc_out.shape).to(self.device)
-        #     # loop for realtion modules
-        #     for att_idx in range(self.num_relation):
-        #         attention_out += self.attention_module_multi_head[fc_idx][att_idx](
-        #             fc_out, position_embedding
-        #         )
-        #     fc_out = F.relu(fc_out + attention_out)
-        # # (batch_images, num_boxes, feat_dim) => (all_valid_boxes, feat_dim)
-        # box_features = fc_out.view(-1, self.feat_dim)[mask,...]
-
+       
         ############################### learn nms ##################################
         # 
         # Input is a set of detected objects:
@@ -227,7 +182,7 @@ class RelationROIHeads(Res5ROIHeads):
         
         # predictions: (cls_score, bbox_pred)
         #   - scores (Tensor): (all_valid_boxes, num_classes + 1), [0, num_classes] 
-        #     => `num_classes` indicates backgroud
+        #     => num_classes indicates backgroud
         #   - proposal_deltas (Tensor): (all_valid_boxes, num_reg_classes * 4)
         predictions = self.box_predictor(box_features.mean(dim=[2, 3]))
         # do not use learn_nms

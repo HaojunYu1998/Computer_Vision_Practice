@@ -6,7 +6,6 @@ from detectron2.structures import Boxes, Instances, pairwise_iou
 from detectron2.modeling.box_regression import Box2BoxTransform
 
 from .attention_module import AttentionNMSModule
-# from .padding import padding_tensor
 from .embedding import (
     extract_rank_embedding, 
     extract_multi_position_matrix,
@@ -185,13 +184,13 @@ class LearnNMSModule(nn.Module):
     ):
         """
         Args:
-            predictions (Tuple(Tensor)): (cls_score, bbox_pred)
+            predictions (Tuple(Tensor)): (scores, proposal_deltas)
               - scores (Tensor): (all_valid_boxes, num_classes + 1)
               - proposal_deltas (Tensor): (all_valid_boxes, num_reg_classes * 4)
             proposal_boxes (List(Boxes)): proposed boxes
         Return:
             nms_multi_score (Tensor): s_0*s_1 in the paper
-            sorted_bbox
+            sorted_boxes
             sorted_score
         """
 
@@ -203,59 +202,67 @@ class LearnNMSModule(nn.Module):
         assert all_valid_boxes % num_boxes == 0
         # batch_images = len(boxes_per_image)
         proposal_deltas.require_grad = False
+        # (all_valid_boxes, 4)
         proposal_boxes = proposal_boxes[0].cat(proposal_boxes).tensor
-        # (all_valid_boxes, 4, num_reg_classes)
-        refined_bbox = self.box2box_transform.apply_deltas(
+        # (batch_images, num_boxes, num_reg_classes, 4)
+        refined_boxes = self.box2box_transform.apply_deltas(
             proposal_deltas, proposal_boxes
-        ).view(all_valid_boxes, 4, self.num_reg_classes)
+        ).view(batch_images, num_boxes, self.num_reg_classes, 4)
         # (batch_images, num_boxes, num_classes)
-        # scores_pad = padding_tensor(scores, boxes_per_image, num_boxes)
         scores = scores.view(batch_images, num_boxes, self.num_classes + 1)
         # (batch_images, num_boxes, num_classes)
-        sorted_score, rank_indices = F.softmax(
+        sorted_score, rank_idxs = F.softmax(
             scores[...,:-1], dim = 1
         ).sort(dim=1, descending=True)
         # (batch_images, first_n, num_classes)
-        sorted_score, rank_indices = sorted_score[:,:self.first_n,:], rank_indices[:,:self.first_n,:]
-        # (batch_images, first_n, num_classes)
-        rank_indices = rank_indices.add(
-            torch.arange(batch_images)[:,None,None].to(self.device) * num_boxes
-        ).view(-1).to(torch.int64)
-        # (batch_images, num_boxes, 4, num_reg_classes)
-        # refined_bbox_pad = padding_tensor(refined_bbox, boxes_per_image, num_boxes)
-        # (batch_images * num_boxes, 4, num_reg_classes)
-        # refined_bbox = refined_bbox_pad.view(-1, 4, self.num_reg_classes)
-        # (batch_images, first_n, num_classes, 4, num_reg_classes)
-        sorted_bbox = refined_bbox[rank_indices].view(
-            batch_images, self.first_n, self.num_classes, 4, self.num_reg_classes
-        )
-        # (batch_images, first_n, num_classes, 4) or original shape
-        sorted_bbox = sorted_bbox.squeeze(4) # num_reg_classes may be 1
-        if len(sorted_bbox.shape) == 5:
-            # (num_classes, num_reg_classes, batch_images, first_n, 4)
-            # => (batch_images, first_n, 4, nuum_classes)
-            sorted_bbox = sorted_bbox.permute(2,4,0,1,3).diagonal(0)
-            # (batch_images, first_n, num_classes, 4)
-            sorted_bbox = sorted_bbox.transpose(2, 3)
+        sorted_score, rank_idxs = sorted_score[:,:self.first_n,:], rank_idxs[:,:self.first_n,:]
+        # List(Tensor(1, first_n, num_classes))
+        idxs_list = torch.chunk(rank_idxs, batch_images, dim = 0)
+        #assert idxs_list[0].shape == (1, self.first_n, self.num_classes) 
+        # List[Tensor(1, num_boxes, num_reg_classes, 4)]
+        boxes_list = torch.chunk(refined_boxes, batch_images, dim = 0)
+        #assert boxes_list[0].shape == (1, num_boxes, self.num_reg_classes, 4) 
+        sorted_boxes_list = []
+        for boxes_per_image, idxs_per_image in zip(boxes_list, idxs_list):
+            # List[Tensor(1, first_n, num_classes)]
+            idxs_class_list = torch.chunk(idxs_per_image, self.num_classes, dim=2)
+            # assert idxs_class_list.shape == (1, self.first_n, 1)
+            # List[Tensor(1, num_boxes, num_reg_classes, 4)]
+            boxes_class_list = torch.chunk(boxes_per_image, self.num_reg_classes, dim=2)
+            boxes_image_list = []
+            for boxes, idxs in zip(boxes_class_list, idxs_class_list):
+                # (1, frist_n, 1, 4)
+                boxes_image_list.append(boxes[:,idxs.squeeze(),:,:])
+            # (1, first_n, num_classes, 4)
+            sorted_boxes_list.append(torch.cat(boxes_image_list, dim=2))
+        # (batch_images, first_n, num_classes, 4)
+        sorted_boxes = torch.cat(sorted_boxes_list, dim=0)
         # (frist_n, 1024)
         nms_rank_embedding = extract_rank_embedding(self.first_n, 1024, self.device)
-        # (frist_n, 128)
+        # (frist_n, nms_fc_dim)
         nms_rank_feat = self.rank_emb_fc(nms_rank_embedding)
         # (batch_images, num_classes, first_n, first_n, 4)
-        
-        nms_position_matrix = extract_multi_position_matrix(sorted_bbox, self.device)
+        nms_position_matrix = extract_multi_position_matrix(sorted_boxes, self.device)
         # (batch_images, num_classes, first_n, first_n, fc_dim)
         nms_position_embedding = extract_pairwise_multi_position_embedding(
             nms_position_matrix,  self.pos_emb_dim, self.device
         )
-        # (all_valid_boxes, feat_dim) => (all_valid_boxes, nms_fc_dim)
-        roi_feat_emb = self.roi_emb_fc(roi_feat)
-        # (batch_images, num_boxes, nms_fc_dim)
-        # roi_feat_pad = padding_tensor(roi_feat_emb, boxes_per_image, num_boxes)
-        # (batch_images * first_n * num_classes, nms_fc_dim)
-        roi_feat = roi_feat_emb.view(-1, self.nms_fc_dim)[rank_indices]
+        # (all_valid_boxes, feat_dim) => (batch_images, num_boxes, nms_fc_dim)
+        roi_feat = self.roi_emb_fc(roi_feat).view(batch_images, num_boxes, self.nms_fc_dim)
+        # List[Tensor(1, num_boxes, nms_fc_dim)]
+        feat_list = torch.chunk(roi_feat, batch_images, dim=0)
+        roi_feat_list = []
+        for feat_per_image, idxs_per_image in zip(feat_list, idxs_list):
+            feat_per_image_list = []
+            # List[Tensor(1, first_n, 1)]
+            idxs_class_list = torch.chunk(idxs_per_image, self.num_classes, dim = 2)
+            for idxs in idxs_class_list:
+                # List[Tensor(1, first_n, 1, nms_fc_dim)]
+                feat_per_image_list.append(feat_per_image[:,idxs.squeeze(),:][:,:,None,:])
+            # List[Tensor(1, num_boxes, num_classes, nms_fc_dim)]
+            roi_feat_list.append(torch.cat(feat_per_image_list, dim=2))
         # (batch_images, first_n, num_classes, nms_fc_dim)
-        roi_feat = roi_feat.view(batch_images, self.first_n, self.num_classes, self.nms_fc_dim)
+        roi_feat = torch.cat(roi_feat_list, dim=0)
         #################### vectorized nms ####################
         # (batch_images, first_n, num_classes, nms_fc_dim)
         nms_embedding_feat = nms_rank_feat[None,:,None,:] + roi_feat
@@ -265,18 +272,12 @@ class LearnNMSModule(nn.Module):
             nms_embedding_feat, nms_position_embedding
         )
         # (batch_images, first_n, num_classes, nms_fc_dim) 
-        # => (batch_images, first_n * num_classes, nms_fc_dim)
-        nms_all_feat = F.relu(
-            nms_embedding_feat + nms_attention
-        ).view(batch_images, self.first_n * self.num_classes, self.nms_fc_dim)
-        # (batch_images, first_n * num_classes, num_thresh)
+        nms_all_feat = F.relu(nms_embedding_feat + nms_attention)
         # => (batch_images, first_n, num_classes, num_thresh)
-        nms_conditional_logit = self.logit_fc(
-            nms_all_feat
-        ).view(batch_images, self.first_n, self.num_classes, self.num_thresh)
+        nms_conditional_logit = self.logit_fc(nms_all_feat)
         # (batch_images, first_n, num_classes, num_thresh)
         nms_conditional_score = F.sigmoid(nms_conditional_logit)
         # (batch_images, first_n, num_classes, num_thresh)
-        nms_multi_score = nms_conditional_score + sorted_score[...,None]
+        nms_multi_score = nms_conditional_score.mul(sorted_score[...,None])
         nms_conditional_score = nms_conditional_score.detach()
-        return nms_multi_score, sorted_bbox, sorted_score
+        return nms_multi_score, sorted_boxes, sorted_score
